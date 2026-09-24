@@ -1,3 +1,10 @@
+# [@notiflyjs/core-v1.0.1](https://github.com/NotiflyJS/notifly/compare/@notiflyjs/core-v1.0.0...@notiflyjs/core-v1.0.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **ci:** migrate npm publish to OIDC trusted publishing ([85b8f39](https://github.com/NotiflyJS/notifly/commit/85b8f3945cb3d0c0f6ccf63b0bc2d5f7463a81a4))
+
 # @notiflyjs/core-v1.0.0 (2026-09-24)
 
 
