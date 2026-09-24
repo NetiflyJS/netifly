@@ -2,7 +2,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -13,11 +15,13 @@ permissions:
 
 jobs:
   release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -31,14 +35,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
 
-      - name: Release @notifly/core
+      - name: Copy README and LICENSE into packages
+        run: |
+          for pkg in core express; do
+            cp README.md "packages/$pkg/README.md"
+            cp LICENSE "packages/$pkg/LICENSE"
+          done
+
+      - name: Release @notiflyjs/core
         working-directory: packages/core
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Release @notifly/express
+      - name: Release @notiflyjs/express
         working-directory: packages/express
         run: npx semantic-release
         env:

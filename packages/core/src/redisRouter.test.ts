@@ -40,18 +40,20 @@ describe('RedisRouter', () => {
     });
     const publisherRouter = createRouter(() => {});
 
-    await subscriberRouter.subscribe('alice');
-    await publisherRouter.publish('alice', { hello: 'world' });
+    await subscriberRouter.subscribe('redisRouter-alice');
+    await publisherRouter.publish('redisRouter-alice', { hello: 'world' });
     await receivedPromise;
 
-    expect(received).toEqual([{ userId: 'alice', rawMessage: JSON.stringify({ hello: 'world' }) }]);
+    expect(received).toEqual([
+      { userId: 'redisRouter-alice', rawMessage: JSON.stringify({ hello: 'world' }) },
+    ]);
   });
 
   it('does not deliver to a userId nobody has subscribed to', async () => {
     const onMessage = jest.fn();
     const publisherRouter = createRouter(onMessage);
 
-    await publisherRouter.publish('nobody-home', { hello: 'world' });
+    await publisherRouter.publish('redisRouter-nobody-home', { hello: 'world' });
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(onMessage).not.toHaveBeenCalled();
@@ -62,9 +64,9 @@ describe('RedisRouter', () => {
     const subscriberRouter = createRouter(onMessage);
     const publisherRouter = createRouter(() => {});
 
-    await subscriberRouter.subscribe('bob');
-    await subscriberRouter.unsubscribe('bob');
-    await publisherRouter.publish('bob', { hello: 'world' });
+    await subscriberRouter.subscribe('redisRouter-bob');
+    await subscriberRouter.unsubscribe('redisRouter-bob');
+    await publisherRouter.publish('redisRouter-bob', { hello: 'world' });
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(onMessage).not.toHaveBeenCalled();
@@ -75,8 +77,8 @@ describe('RedisRouter', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
 
-    await expect(publisherRouter.publish('zoe', circular)).rejects.toThrow(
-      'Notifly: payload for user "zoe" is not JSON-serializable'
+    await expect(publisherRouter.publish('redisRouter-zoe', circular)).rejects.toThrow(
+      'Notifly: payload for user "redisRouter-zoe" is not JSON-serializable'
     );
   });
 

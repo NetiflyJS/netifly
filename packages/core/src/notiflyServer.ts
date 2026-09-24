@@ -30,8 +30,15 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
       },
     });
 
+    const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
+    if (!redisUrl) {
+      throw new Error(
+        'Notifly: no redisUrl provided and REDIS_URL is not set. Pass { redisUrl } to createNotifly() or set the REDIS_URL environment variable.'
+      );
+    }
+
     this.router = new RedisRouter({
-      redisUrl: options.redisUrl ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
+      redisUrl,
       onMessage: (userId, rawMessage) => this.deliverLocally(userId, rawMessage),
       onError: (error) => this.emitError(error),
     });
@@ -56,7 +63,8 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
     let userId: unknown;
     try {
       userId = await this.resolveUserId(req);
-    } catch {
+    } catch (error) {
+      this.emitError(error);
       userId = null;
     }
 
@@ -75,6 +83,12 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
   // than firing it in the background) minimizes the window where a send()
   // that races a brand-new connection would be dropped.
   private async registerConnection(userId: UserId, ws: WebSocket): Promise<void> {
+    // Tracks whether this connection actually made it into the registry, so
+    // the 'close' listener below never emits 'disconnect' without a matching
+    // prior 'connect' (e.g. when the socket dies before registration
+    // completes).
+    let registered = false;
+
     // Attached before the subscribe await below so that a socket which
     // disconnects during that window is still observed: without these
     // listeners in place first, an early 'close' would fire on a socket we
@@ -82,7 +96,9 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
     ws.on('error', (error) => this.emitError(error));
     ws.on('close', () => {
       this.registry.remove(userId, ws);
-      this.emit('disconnect', userId);
+      if (registered) {
+        this.emit('disconnect', userId);
+      }
     });
 
     const needsSubscribe = !this.registry.hasConnections(userId);
@@ -100,14 +116,17 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
       // The socket closed while we were awaiting the SUBSCRIBE above. Its
       // 'close' listener already ran registry.remove (a no-op, since we
       // hadn't added it yet). If we just created a brand-new subscription
-      // for this user on its behalf, undo it now so it doesn't leak.
-      if (needsSubscribe) {
+      // for this user on its behalf, undo it now so it doesn't leak — unless
+      // another connection for the same user registered in the meantime, in
+      // which case unsubscribing here would pull the rug out from under it.
+      if (needsSubscribe && !this.registry.hasConnections(userId)) {
         this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
       }
       return;
     }
 
     this.registry.add(userId, ws);
+    registered = true;
     this.emit('connect', userId);
   }
 
@@ -145,6 +164,9 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
   }
 
   async close(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
     clearInterval(this.heartbeatTimer);
 

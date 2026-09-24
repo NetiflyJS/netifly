@@ -35,9 +35,9 @@ jobs:
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - run: pnpm run lint
       - run: pnpm run typecheck
       - run: pnpm run test
         env:
           REDIS_URL: redis://127.0.0.1:6379
-      - run: pnpm run build
