@@ -18,5 +18,7 @@ export interface NotiflyInstance {
   disconnect(userId: UserId): void;
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
+  once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
+  once(event: 'error', listener: (error: Error) => void): this;
   close(): Promise<void>;
 }

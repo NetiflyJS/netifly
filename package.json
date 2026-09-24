@@ -13,10 +13,18 @@
     "typecheck": "pnpm -r run typecheck"
   },
   "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.0",
+    "@semantic-release/exec": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^10.1.1",
+    "@semantic-release/release-notes-generator": "^14.0.1",
     "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
     "eslint": "^8.57.0",
     "prettier": "^3.3.3",
+    "semantic-release": "^24.0.0",
+    "semantic-release-monorepo": "^8.0.2",
     "typescript": "^5.5.4"
   }
 }

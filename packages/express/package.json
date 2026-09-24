@@ -1,7 +1,7 @@
 {
-  "name": "@notifly/express",
+  "name": "@notiflyjs/express",
   "version": "0.0.0",
-  "description": "Express adapter for @notifly/core — real-time per-user WebSocket notifications backed by Redis.",
+  "description": "Express adapter for @notiflyjs/core — real-time per-user WebSocket notifications backed by Redis.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@notifly/core": "workspace:*"
+    "@notiflyjs/core": "workspace:*"
   },
   "peerDependencies": {
     "express": "^4.19.0"
