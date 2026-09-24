@@ -23,7 +23,15 @@ export class RedisRouter {
 
   constructor(options: RedisRouterOptions) {
     this.publisher = new Redis(options.redisUrl);
-    this.subscriber = new Redis(options.redisUrl);
+    // enableReadyCheck is disabled here because ioredis's own connection
+    // handshake sends an INFO command to verify readiness, and that command
+    // can race against our SUBSCRIBE call below. If SUBSCRIBE reaches the
+    // server first, the connection enters subscriber-only mode and Redis
+    // rejects the in-flight INFO command ("ERR Can't execute 'info'"),
+    // which ioredis then reports as a fatal connection error. This
+    // connection is subscribe-only, so the readiness check serves no
+    // purpose here.
+    this.subscriber = new Redis(options.redisUrl, { enableReadyCheck: false });
 
     if (options.onError) {
       this.publisher.on('error', options.onError);
