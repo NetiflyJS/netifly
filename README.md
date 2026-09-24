@@ -1,4 +1,11 @@
-# 🔔 Notifly
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/notifly-mark-on-dark.svg">
+    <img src="assets/brand/notifly-mark.svg" alt="Notifly" width="96">
+  </picture>
+</p>
+
+<h1 align="center">notifly</h1>
 
 Framework-agnostic, real-time per-user notifications for Node.js servers — WebSockets in, Redis pub/sub for horizontal scaling.
 
