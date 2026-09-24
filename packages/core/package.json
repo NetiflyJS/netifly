@@ -1,11 +1,13 @@
 {
   "name": "@notiflyjs/core",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and Redis.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "jest",
