@@ -26,14 +26,14 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
 
     this.registry = new ConnectionRegistry<WebSocket>({
       onLastDisconnect: (userId) => {
-        void this.router.unsubscribe(userId);
+        this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
       },
     });
 
     this.router = new RedisRouter({
       redisUrl: options.redisUrl ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
       onMessage: (userId, rawMessage) => this.deliverLocally(userId, rawMessage),
-      onError: (error) => this.emit('error', error),
+      onError: (error) => this.emitError(error),
     });
 
     this.wss = new WebSocketServer({ noServer: true });
@@ -75,16 +75,52 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
   // than firing it in the background) minimizes the window where a send()
   // that races a brand-new connection would be dropped.
   private async registerConnection(userId: UserId, ws: WebSocket): Promise<void> {
-    if (!this.registry.hasConnections(userId)) {
-      await this.router.subscribe(userId);
-    }
-    this.registry.add(userId, ws);
-    this.emit('connect', userId);
-
+    // Attached before the subscribe await below so that a socket which
+    // disconnects during that window is still observed: without these
+    // listeners in place first, an early 'close' would fire on a socket we
+    // haven't started tracking yet, and we'd never find out.
+    ws.on('error', (error) => this.emitError(error));
     ws.on('close', () => {
       this.registry.remove(userId, ws);
       this.emit('disconnect', userId);
     });
+
+    const needsSubscribe = !this.registry.hasConnections(userId);
+    if (needsSubscribe) {
+      try {
+        await this.router.subscribe(userId);
+      } catch (error) {
+        this.emitError(error);
+        ws.terminate();
+        return;
+      }
+    }
+
+    if (ws.readyState !== WebSocket.OPEN) {
+      // The socket closed while we were awaiting the SUBSCRIBE above. Its
+      // 'close' listener already ran registry.remove (a no-op, since we
+      // hadn't added it yet). If we just created a brand-new subscription
+      // for this user on its behalf, undo it now so it doesn't leak.
+      if (needsSubscribe) {
+        this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
+      }
+      return;
+    }
+
+    this.registry.add(userId, ws);
+    this.emit('connect', userId);
+  }
+
+  // Emits 'error' only when a consumer is actually listening. NotiflyServerImpl
+  // is a plain EventEmitter, and Node throws synchronously when 'error' is
+  // emitted with no listener attached — that would crash the host process for
+  // something as routine as a transient Redis hiccup or a flaky client socket,
+  // which contradicts this library's goal of surfacing errors rather than
+  // taking the host down.
+  private emitError(error: unknown): void {
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   private deliverLocally(userId: UserId, rawMessage: string): void {
@@ -111,6 +147,15 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
   async close(): Promise<void> {
     this.closed = true;
     clearInterval(this.heartbeatTimer);
+
+    // WebSocketServer#close's callback only fires once wss.clients is empty
+    // — it does not close tracked client sockets itself. With any client
+    // still connected, awaiting it below would hang forever, so every
+    // tracked client is force-closed first.
+    for (const ws of this.wss.clients) {
+      ws.terminate();
+    }
+
     await new Promise<void>((resolve, reject) => {
       this.wss.close((err) => (err ? reject(err) : resolve()));
     });

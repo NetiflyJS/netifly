@@ -156,6 +156,30 @@ describe('createNotifly', () => {
     await closePromise;
   });
 
+  it('close() resolves even while a client is still connected', async () => {
+    const server = await startTestServer(() => 'henry');
+    servers.push(server);
+
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await wait(100);
+
+    // A regression here (close() hanging because WebSocketServer#close()
+    // never gets its tracked clients removed) should fail this test loudly
+    // and quickly rather than hanging the whole run for jest.setTimeout's
+    // full 15s.
+    await expect(
+      Promise.race([
+        server.close(),
+        wait(3000).then(() => {
+          throw new Error('close() did not resolve within 3000ms with a client still connected');
+        }),
+      ])
+    ).resolves.toBeUndefined();
+
+    servers.pop(); // already closed above; skip afterEach double-close
+  });
+
   it('rejects send() after close()', async () => {
     const server = await startTestServer(() => 'gina');
     servers.push(server);
