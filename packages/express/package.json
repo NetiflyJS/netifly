@@ -1,11 +1,13 @@
 {
   "name": "@notiflyjs/express",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Express adapter for @notiflyjs/core — real-time per-user WebSocket notifications backed by Redis.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "jest",
