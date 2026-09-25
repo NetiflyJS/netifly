@@ -1,3 +1,10 @@
+# [@netiflyjs/express-v1.1.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.0.0...@netiflyjs/express-v1.1.0) (2026-09-25)
+
+
+### Features
+
+* updated docs and license ([bb80f69](https://github.com/NetiflyJS/netifly/commit/bb80f69e24f78dd6fc538cf42096854de33c9de6))
+
 # @netiflyjs/express-v1.0.0 (2026-09-25)
 
 
