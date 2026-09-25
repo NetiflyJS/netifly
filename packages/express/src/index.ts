@@ -1,20 +1,20 @@
 // packages/express/src/index.ts
 import http from 'node:http';
 import type { Express } from 'express';
-import { createNotifly } from '@netiflyjs/core';
-import type { CreateNotiflyOptions, NotiflyInstance } from '@netiflyjs/core';
+import { createNetifly } from '@netiflyjs/core';
+import type { CreateNetiflyOptions, NetiflyInstance } from '@netiflyjs/core';
 
-export interface AttachNotiflyOptions extends Omit<CreateNotiflyOptions, 'server'> {
+export interface AttachNetiflyOptions extends Omit<CreateNetiflyOptions, 'server'> {
   server?: http.Server;
 }
 
-export interface AttachNotiflyResult {
+export interface AttachNetiflyResult {
   server: http.Server;
-  notifly: NotiflyInstance;
+  netifly: NetiflyInstance;
 }
 
-export function attachNotifly(app: Express, options: AttachNotiflyOptions): AttachNotiflyResult {
+export function attachNetifly(app: Express, options: AttachNetiflyOptions): AttachNetiflyResult {
   const server = options.server ?? http.createServer(app);
-  const notifly = createNotifly({ ...options, server });
-  return { server, notifly };
+  const netifly = createNetifly({ ...options, server });
+  return { server, netifly };
 }

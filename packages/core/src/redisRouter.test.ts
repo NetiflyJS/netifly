@@ -6,7 +6,7 @@ jest.setTimeout(15000);
 
 describe('channelName', () => {
   it('formats the per-user channel name', () => {
-    expect(channelName('alice')).toBe('notifly:user:alice');
+    expect(channelName('alice')).toBe('netifly:user:alice');
   });
 });
 
@@ -78,7 +78,7 @@ describe('RedisRouter', () => {
     circular.self = circular;
 
     await expect(publisherRouter.publish('redisRouter-zoe', circular)).rejects.toThrow(
-      'Notifly: payload for user "redisRouter-zoe" is not JSON-serializable'
+      'Netifly: payload for user "redisRouter-zoe" is not JSON-serializable'
     );
   });
 

@@ -5,21 +5,21 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
-import type { CreateNotiflyOptions, NotiflyInstance, UserId } from './types';
+import type { CreateNetiflyOptions, NetiflyInstance, UserId } from './types';
 
-const DEFAULT_PATH = '/notifly';
+const DEFAULT_PATH = '/netifly';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
-class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
+class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private readonly wss: WebSocketServer;
   private readonly registry: ConnectionRegistry<WebSocket>;
   private readonly router: RedisRouter;
-  private readonly resolveUserId: CreateNotiflyOptions['resolveUserId'];
+  private readonly resolveUserId: CreateNetiflyOptions['resolveUserId'];
   private readonly path: string;
   private readonly heartbeatTimer: NodeJS.Timeout;
   private closed = false;
 
-  constructor(options: CreateNotiflyOptions) {
+  constructor(options: CreateNetiflyOptions) {
     super();
     this.resolveUserId = options.resolveUserId;
     this.path = options.path ?? DEFAULT_PATH;
@@ -33,7 +33,7 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
     const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
     if (!redisUrl) {
       throw new Error(
-        'Notifly: no redisUrl provided and REDIS_URL is not set. Pass { redisUrl } to createNotifly() or set the REDIS_URL environment variable.'
+        'Netifly: no redisUrl provided and REDIS_URL is not set. Pass { redisUrl } to createNetifly() or set the REDIS_URL environment variable.'
       );
     }
 
@@ -130,7 +130,7 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
     this.emit('connect', userId);
   }
 
-  // Emits 'error' only when a consumer is actually listening. NotiflyServerImpl
+  // Emits 'error' only when a consumer is actually listening. NetiflyServerImpl
   // is a plain EventEmitter, and Node throws synchronously when 'error' is
   // emitted with no listener attached — that would crash the host process for
   // something as routine as a transient Redis hiccup or a flaky client socket,
@@ -152,7 +152,7 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
 
   async send(userId: UserId, payload: unknown): Promise<void> {
     if (this.closed) {
-      throw new Error('Notifly: cannot send after close()');
+      throw new Error('Netifly: cannot send after close()');
     }
     await this.router.publish(userId, payload);
   }
@@ -186,6 +186,6 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
   }
 }
 
-export function createNotifly(options: CreateNotiflyOptions): NotiflyInstance {
-  return new NotiflyServerImpl(options);
+export function createNetifly(options: CreateNetiflyOptions): NetiflyInstance {
+  return new NetiflyServerImpl(options);
 }

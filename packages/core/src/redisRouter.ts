@@ -7,7 +7,7 @@ export interface RedisRouterOptions {
   onError?: (error: Error) => void;
 }
 
-const CHANNEL_PREFIX = 'notifly:user:';
+const CHANNEL_PREFIX = 'netifly:user:';
 
 export function channelName(userId: UserId): string {
   return `${CHANNEL_PREFIX}${userId}`;
@@ -59,7 +59,7 @@ export class RedisRouter {
     try {
       serialized = JSON.stringify(payload);
     } catch (error) {
-      const message = `Notifly: payload for user "${userId}" is not JSON-serializable`;
+      const message = `Netifly: payload for user "${userId}" is not JSON-serializable`;
       const serializationError = new Error(message);
       (serializationError as Error & { cause?: unknown }).cause = error;
       throw serializationError;
