@@ -109,7 +109,80 @@ describe('createNetifly', () => {
     const messagePromise = nextMessage(client);
     await server.netifly.send('netiflyServer-alice', { type: 'greeting', text: 'hi' });
 
-    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: 'greeting', text: 'hi' }));
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ type: 'greeting', text: 'hi' });
+  });
+
+  it('wraps a two-arg send() payload in an envelope with type "message"', async () => {
+    const server = await startTestServer(() => 'netiflyServer-envelope-message');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const messagePromise = nextMessage(client);
+    await server.netifly.send('netiflyServer-envelope-message', { text: 'hi' });
+
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope).toMatchObject({
+      v: 1,
+      type: 'message',
+      data: { text: 'hi' },
+    });
+    expect(typeof envelope.id).toBe('string');
+    expect(typeof envelope.ts).toBe('number');
+  });
+
+  it('wraps a three-arg send() type/data in an envelope with the given type', async () => {
+    const server = await startTestServer(() => 'netiflyServer-envelope-typed');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const messagePromise = nextMessage(client);
+    await server.netifly.send('netiflyServer-envelope-typed', 'comment.created', { commentId: 42 });
+
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope).toMatchObject({
+      v: 1,
+      type: 'comment.created',
+      data: { commentId: 42 },
+    });
+    expect(typeof envelope.id).toBe('string');
+    expect(typeof envelope.ts).toBe('number');
+  });
+
+  it('generates unique, strictly increasing envelope ids for sequential sends', async () => {
+    const server = await startTestServer(() => 'netiflyServer-envelope-ids');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const COUNT = 50;
+    const messages: string[] = [];
+    const allReceived = new Promise<void>((resolve) => {
+      client.on('message', (data) => {
+        messages.push(data.toString());
+        if (messages.length === COUNT) resolve();
+      });
+    });
+
+    for (let i = 0; i < COUNT; i++) {
+      await server.netifly.send('netiflyServer-envelope-ids', { i });
+    }
+    await allReceived;
+
+    const ids: string[] = messages.map((m) => JSON.parse(m).id as string);
+    expect(new Set(ids).size).toBe(COUNT);
+    expect(ids).toEqual([...ids].sort());
   });
 
   it('delivers a send() across two server instances via Redis', async () => {
@@ -125,7 +198,8 @@ describe('createNetifly', () => {
     const messagePromise = nextMessage(client);
     await serverA.netifly.send('netiflyServer-bob', { type: 'cross-instance' });
 
-    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: 'cross-instance' }));
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ type: 'cross-instance' });
   });
 
   it('delivers a send() to every connection a user has open', async () => {
@@ -146,8 +220,8 @@ describe('createNetifly', () => {
     const messageB = nextMessage(clientB);
     await server.netifly.send('netiflyServer-frank', { type: 'multi-tab' });
 
-    await expect(messageA).resolves.toBe(JSON.stringify({ type: 'multi-tab' }));
-    await expect(messageB).resolves.toBe(JSON.stringify({ type: 'multi-tab' }));
+    expect(JSON.parse(await messageA).data).toEqual({ type: 'multi-tab' });
+    expect(JSON.parse(await messageB).data).toEqual({ type: 'multi-tab' });
   });
 
   it('is a no-op when sending to a user with no connections anywhere', async () => {

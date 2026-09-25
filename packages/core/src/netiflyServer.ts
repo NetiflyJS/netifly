@@ -2,10 +2,12 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
+import { monotonicFactory } from 'ulid';
 import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
-import type { CreateNetiflyOptions, NetiflyInstance, UserId } from './types';
+import { ENVELOPE_VERSION } from './types';
+import type { CreateNetiflyOptions, Envelope, NetiflyInstance, UserId } from './types';
 
 const DEFAULT_PATH = '/netifly';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -17,6 +19,7 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private readonly resolveUserId: CreateNetiflyOptions['resolveUserId'];
   private readonly path: string;
   private readonly heartbeatTimer: NodeJS.Timeout;
+  private readonly ulid = monotonicFactory();
   private closed = false;
 
   constructor(options: CreateNetiflyOptions) {
@@ -150,11 +153,19 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     }
   }
 
-  async send(userId: UserId, payload: unknown): Promise<void> {
+  async send<T>(userId: UserId, payload: T): Promise<void>;
+  async send<T>(userId: UserId, type: string, data: T): Promise<void>;
+  async send<T>(userId: UserId, ...rest: [T] | [string, T]): Promise<void> {
     if (this.closed) {
       throw new Error('Netifly: cannot send after close()');
     }
-    await this.router.publish(userId, payload);
+    const envelope =
+      rest.length === 2 ? this.buildEnvelope(rest[0], rest[1]) : this.buildEnvelope('message', rest[0]);
+    await this.router.publish(userId, envelope);
+  }
+
+  private buildEnvelope<T>(type: string, data: T): Envelope<T> {
+    return { v: ENVELOPE_VERSION, id: this.ulid(), type, data, ts: Date.now() };
   }
 
   disconnect(userId: UserId): void {
