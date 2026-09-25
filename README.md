@@ -7,6 +7,8 @@
 
 <h1 align="center">netifly</h1>
 
+<p align="center"><strong>Real-time user notifications for Node, secure by default. Send to a user, not a channel.</strong></p>
+
 Framework-agnostic, real-time per-user notifications for Node.js servers — WebSockets in, Redis pub/sub for horizontal scaling.
 
 [![npm version](https://img.shields.io/npm/v/@netiflyjs/core.svg)](https://www.npmjs.com/package/@netiflyjs/core)
@@ -23,6 +25,17 @@ Framework-agnostic, real-time per-user notifications for Node.js servers — Web
 - 💓 **Dead-connection reaping** — a ping/pong heartbeat terminates clients that silently disappeared.
 - 🧩 **Zero opinions on payload shape** — send whatever JSON-serializable data your app needs.
 - ✉️ **Stable message envelope** — every message is wrapped in a small `{ v, id, type, data, ts }` envelope with a server-generated, sortable id.
+
+## 🆚 Why Netifly vs. Socket.IO / Pusher
+
+| | **Netifly** | Socket.IO | Pusher |
+| --- | --- | --- | --- |
+| Routing model | Per-user — `send(userId, payload)` reaches every connection that user has open | Per-room/channel — you manage the user↔socket mapping yourself | Per-channel — you manage the user↔channel mapping yourself |
+| Infrastructure | Self-hosted, backed by your own Redis | Self-hosted, backed by your own adapter (Redis, etc.) | Third-party hosted service |
+| Pricing | Free — you only pay for your own Redis | Free — you only pay for your own infra | Per-message / per-connection billing |
+| Data path | Never leaves your infrastructure | Never leaves your infrastructure | Passes through a third party |
+
+Netifly is deliberately narrow: no rooms, no presence, no broadcast — just "deliver this payload to this user, wherever they're connected." Reach for Socket.IO if you need room-based fan-out to anonymous clients; reach for Pusher if a managed service and its recurring bill are an acceptable trade for not running your own Redis.
 
 ## 📦 Installation
 
@@ -76,14 +89,7 @@ server.listen(3000);
 
 > ⚠️ WebSocket upgrade requests bypass Express's routing/middleware entirely, so `resolveUserId` always receives the raw Node `IncomingMessage`, not an Express `Request`.
 
-> 🛡️ **Security:** WebSocket handshakes are not subject to the same-origin policy and browsers DO send cookies cross-origin on the upgrade request. If your `resolveUserId` derives identity from a cookie-based session, add an `Origin` check inside `resolveUserId` to prevent cross-site WebSocket hijacking, e.g.:
-> ```ts
-> const ALLOWED_ORIGINS = new Set(['https://app.example.com']);
-> resolveUserId: async (req) => {
->   if (!ALLOWED_ORIGINS.has(req.headers.origin ?? '')) return null;
->   return verifyJwtFromRequest(req);
-> }
-> ```
+> 🛡️ If `resolveUserId` derives identity from a cookie-based session, read the [Security](#-security) section below before going to production — WebSocket handshakes bypass the same-origin policy, so cookie auth needs an explicit `Origin` check.
 
 ## 🔐 Redis Configuration
 
@@ -97,6 +103,36 @@ REDIS_URL=rediss://user:password@host:6380/0
 
 or explicitly via the `redisUrl` option to `createNetifly()`/`attachNetifly()`, which takes priority over the env var. There is **no default/fallback connection** — if neither `redisUrl` nor `REDIS_URL` is provided, `createNetifly()`/`attachNetifly()` throws a clear error immediately rather than silently connecting to a local Redis instance.
 
+## 🛡️ Security
+
+### Origin allowlist
+
+WebSocket handshakes are exempt from the same-origin policy, and browsers *do* send cookies cross-origin on the upgrade request. Netifly has no built-in origin check — if `resolveUserId` derives identity from a cookie-based session, you must allowlist origins yourself, inside `resolveUserId`:
+
+```ts
+const ALLOWED_ORIGINS = new Set(['https://app.example.com']);
+resolveUserId: async (req) => {
+  if (!ALLOWED_ORIGINS.has(req.headers.origin ?? '')) return null;
+  return verifyJwtFromRequest(req);
+}
+```
+
+Returning a falsy value from `resolveUserId` rejects the connection — Netifly destroys the socket immediately.
+
+### Cookie vs. token auth
+
+- **Cookie-based sessions** are convenient but exposed to cross-site WebSocket hijacking (see above) — an Origin check is not optional if you use them.
+- **Bearer tokens** (e.g. a short-lived JWT read from a query param or the `Sec-WebSocket-Protocol` header) sidestep cross-origin cookie replay entirely, since the browser only attaches them if your client code puts them there. This is the safer default if you control the client.
+
+Either way, enforcement happens inside `resolveUserId` — Netifly is auth-agnostic and never inspects cookies, headers, or tokens itself.
+
+### Limits
+
+Netifly ships with no built-in rate limiting, per-user connection caps, or message-size limits — `resolveUserId` and `send()` run as fast as your app calls them. If you need to bound abuse, enforce it at your layer:
+
+- **Connections per user** — reject in `resolveUserId` (e.g. check a counter you maintain in Redis) once a user already holds too many open sockets.
+- **Message rate / size** — validate before calling `send()`, or front the upgrade endpoint with a reverse proxy or API gateway that enforces connection and body-size limits.
+- **`disconnect(userId)` is local-only** (see [API Reference](#-api-reference)) — it is not a substitute for revoking a compromised session cluster-wide; prefer short-lived tokens `resolveUserId` can reject once revoked.
 ## ✉️ Message Envelope
 
 This is a **public wire contract**: every message Netifly delivers over the WebSocket — regardless of which `send()` overload produced it — is wrapped in this envelope:
