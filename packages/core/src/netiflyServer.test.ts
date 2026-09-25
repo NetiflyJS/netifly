@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { createNetifly } from './netiflyServer';
+import { RedisRouter } from './redisRouter';
 import type { NetiflyInstance } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
@@ -283,5 +284,74 @@ describe('createNetifly', () => {
     );
 
     servers.pop(); // already closed above; skip afterEach double-close
+  });
+
+  // NOT-5 regression: connection A subscribes, its socket dies while the
+  // SUBSCRIBE is still in flight, and connection B for the same user arrives
+  // and starts its own SUBSCRIBE before A's is observed to complete. A's
+  // post-await cleanup must not tear down B's subscription.
+  //
+  // RedisRouter#subscribe is wrapped rather than the raw ioredis client:
+  // the fix makes an overlapping subscribe() resolve without ever touching
+  // Redis (it just bumps a ref count), so counting real ioredis calls can't
+  // distinguish "A's call" from "B's call" once the fix is in place. Forwarding
+  // to the real method immediately preserves its real side effects (ref
+  // counting, actual SUBSCRIBE/UNSUBSCRIBE commands) — only the moment
+  // netiflyServer is told "your subscribe finished" is held back, under
+  // test control.
+  it('does not lose messages when a second connection for the same user arrives while the first is still subscribing and then closes', async () => {
+    const userId = 'netiflyServer-race';
+    const originalSubscribe = RedisRouter.prototype.subscribe;
+    const releases: Array<() => void> = [];
+    let callIndex = 0;
+
+    const subscribeSpy = jest
+      .spyOn(RedisRouter.prototype, 'subscribe')
+      .mockImplementation(function (this: RedisRouter, subscribedUserId: string) {
+        const index = callIndex++;
+        const realPromise = originalSubscribe.call(this, subscribedUserId);
+        if (index > 1) return realPromise;
+        return new Promise<void>((resolve, reject) => {
+          releases[index] = () => realPromise.then(resolve, reject);
+        });
+      });
+
+    try {
+      const server = await startTestServer(() => userId);
+      servers.push(server);
+
+      const clientA = await connectClient(server.port);
+      clients.push(clientA);
+      await wait(20); // let registerConnection(A) reach the subscribe call
+
+      const aClosed = new Promise<void>((resolve) => clientA.once('close', () => resolve()));
+      clientA.terminate();
+      await aClosed;
+
+      const clientB = await connectClient(server.port);
+      clients.push(clientB);
+      await wait(20); // let registerConnection(B) reach its own subscribe call, still unresolved
+
+      releases[0](); // A's SUBSCRIBE resolves; A is already closed, triggering its cleanup
+      await wait(20);
+
+      const bConnected = onceEvent(server.netifly, 'connect');
+      releases[1](); // B's SUBSCRIBE resolves; B registers
+      await bConnected;
+
+      const messagePromise = nextMessage(clientB);
+      await server.netifly.send(userId, { type: 'after-race' });
+
+      const received = await Promise.race([
+        messagePromise,
+        wait(3000).then(() => {
+          throw new Error('clientB never received the message published after the race');
+        }),
+      ]);
+      const envelope = JSON.parse(received);
+      expect(envelope.data).toEqual({ type: 'after-race' });
+    } finally {
+      subscribeSpy.mockRestore();
+    }
   });
 });

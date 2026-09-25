@@ -1,8 +1,19 @@
+import Redis from 'ioredis';
 import { RedisRouter, channelName } from './redisRouter';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
 jest.setTimeout(15000);
+
+async function numSubscribers(channel: string): Promise<number> {
+  const client = new Redis(REDIS_URL);
+  try {
+    const [, count] = (await client.call('PUBSUB', 'NUMSUB', channel)) as [string, number];
+    return count;
+  } finally {
+    client.disconnect();
+  }
+}
 
 describe('channelName', () => {
   it('formats the per-user channel name', () => {
@@ -70,6 +81,46 @@ describe('RedisRouter', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  // NOT-5: two callers subscribing on behalf of the same userId (e.g. two
+  // WebSocket connections for the same user) must not be able to tear down
+  // each other's subscription. Regression test for the race where a second
+  // subscriber's unsubscribe (or, as here, the first's while a second is
+  // still active) silently drops the channel out from under the survivor.
+  it('keeps a channel subscribed for a second caller after the first of two overlapping subscribers unsubscribes', async () => {
+    const onMessage = jest.fn();
+    const subscriberRouter = createRouter(onMessage);
+    const publisherRouter = createRouter(() => {});
+
+    await subscriberRouter.subscribe('redisRouter-overlap');
+    await subscriberRouter.subscribe('redisRouter-overlap'); // second overlapping subscriber
+    await subscriberRouter.unsubscribe('redisRouter-overlap'); // first subscriber's cleanup
+
+    await publisherRouter.publish('redisRouter-overlap', { hello: 'still here' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(onMessage).toHaveBeenCalledWith(
+      'redisRouter-overlap',
+      JSON.stringify({ hello: 'still here' })
+    );
+  });
+
+  it('only stops delivering once every overlapping subscriber has unsubscribed', async () => {
+    const onMessage = jest.fn();
+    const subscriberRouter = createRouter(onMessage);
+    const publisherRouter = createRouter(() => {});
+
+    await subscriberRouter.subscribe('redisRouter-overlap-close');
+    await subscriberRouter.subscribe('redisRouter-overlap-close');
+    await subscriberRouter.unsubscribe('redisRouter-overlap-close');
+    await subscriberRouter.unsubscribe('redisRouter-overlap-close');
+
+    await publisherRouter.publish('redisRouter-overlap-close', { hello: 'gone' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(await numSubscribers(channelName('redisRouter-overlap-close'))).toBe(0);
   });
 
   it('rejects a non-serializable payload with a clear error', async () => {
