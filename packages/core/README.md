@@ -75,14 +75,7 @@ server.listen(3000);
 
 > ⚠️ WebSocket upgrade requests bypass Express's routing/middleware entirely, so `resolveUserId` always receives the raw Node `IncomingMessage`, not an Express `Request`.
 
-> 🛡️ **Security:** WebSocket handshakes are not subject to the same-origin policy and browsers DO send cookies cross-origin on the upgrade request. If your `resolveUserId` derives identity from a cookie-based session, add an `Origin` check inside `resolveUserId` to prevent cross-site WebSocket hijacking, e.g.:
-> ```ts
-> const ALLOWED_ORIGINS = new Set(['https://app.example.com']);
-> resolveUserId: async (req) => {
->   if (!ALLOWED_ORIGINS.has(req.headers.origin ?? '')) return null;
->   return verifyJwtFromRequest(req);
-> }
-> ```
+> 🛡️ **Security:** WebSocket handshakes are not subject to the same-origin policy, and browsers DO send cookies cross-origin on the upgrade request — this is what enables cross-site WebSocket hijacking (CSWSH) when `resolveUserId` derives identity from a cookie-based session. Netifly checks `Origin` against the request's `Host` by default and rejects mismatches with `403` before `resolveUserId` runs; pass `allowedOrigins` to customize or opt out. See the [root README's Security section](https://github.com/NetiflyJS/netifly#-security) for details.
 
 ## 🔐 Redis Configuration
 
@@ -106,12 +99,13 @@ or explicitly via the `redisUrl` option to `createNetifly()`/`attachNetifly()`, 
 | `resolveUserId` | `(req) => string \| null \| undefined \| Promise<...>` | ✅ | Identifies the connecting user. Returning a falsy value rejects the connection. |
 | `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Netifly throws at construction time if neither is set (no default/local fallback). |
 | `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
+| `allowedOrigins` | `(string \| RegExp)[] \| ((origin) => boolean) \| '*'` | — | Defaults to same-host only. See [Security](https://github.com/NetiflyJS/netifly#-security). |
 
 Returns a `NetiflyInstance`:
 
 - `send(userId, payload): Promise<void>` — delivers `payload` to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
-- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
+- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, origin, req }) => void)` — fires when the origin check rejects an upgrade. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
 ### `attachNetifly(app, options)` — `@netiflyjs/express`

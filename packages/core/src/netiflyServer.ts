@@ -7,7 +7,14 @@ import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
 import { ENVELOPE_VERSION } from './types';
-import type { CreateNetiflyOptions, Envelope, NetiflyInstance, UserId } from './types';
+import type {
+  AllowedOrigins,
+  CreateNetiflyOptions,
+  Envelope,
+  NetiflyInstance,
+  RejectInfo,
+  UserId,
+} from './types';
 
 const DEFAULT_PATH = '/netifly';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -18,6 +25,7 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private readonly router: RedisRouter;
   private readonly resolveUserId: CreateNetiflyOptions['resolveUserId'];
   private readonly path: string;
+  private readonly allowedOrigins: AllowedOrigins | undefined;
   private readonly heartbeatTimer: NodeJS.Timeout;
   private readonly ulid = monotonicFactory();
   private closed = false;
@@ -26,6 +34,7 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     super();
     this.resolveUserId = options.resolveUserId;
     this.path = options.path ?? DEFAULT_PATH;
+    this.allowedOrigins = options.allowedOrigins;
 
     this.registry = new ConnectionRegistry<WebSocket>({});
 
@@ -56,6 +65,16 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
     const url = new URL(req.url ?? '', 'http://localhost');
     if (url.pathname !== this.path) {
+      return;
+    }
+
+    const origin = req.headers.origin;
+    if (!this.isOriginAllowed(origin, req)) {
+      // socket.end() (rather than write() + destroy()) lets the response
+      // flush before the socket closes — matches ws's own abortHandshake().
+      socket.once('finish', () => socket.destroy());
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      this.emitReject({ reason: 'origin', status: 403, origin, req });
       return;
     }
 
@@ -129,6 +148,41 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     this.emit('connect', userId);
   }
 
+  private isOriginAllowed(origin: string | undefined, req: IncomingMessage): boolean {
+    if (this.allowedOrigins === '*') {
+      return true;
+    }
+
+    if (typeof this.allowedOrigins === 'function') {
+      return this.allowedOrigins(origin);
+    }
+
+    // Non-browser clients (raw ws connections, server-to-server) don't send
+    // an Origin header at all — allowed by default for every form except the
+    // function predicate above, which the caller can use to require one.
+    if (origin === undefined) {
+      return true;
+    }
+
+    if (Array.isArray(this.allowedOrigins)) {
+      return this.allowedOrigins.some((entry) => {
+        if (typeof entry === 'string') {
+          return entry === origin;
+        }
+        // Reset lastIndex first: a g/y-flagged RegExp is stateful, and
+        // reusing one across calls would otherwise alternate match results.
+        entry.lastIndex = 0;
+        return entry.test(origin);
+      });
+    }
+
+    try {
+      return new URL(origin).host === req.headers.host;
+    } catch {
+      return false;
+    }
+  }
+
   // Emits 'error' only when a consumer is actually listening. NetiflyServerImpl
   // is a plain EventEmitter, and Node throws synchronously when 'error' is
   // emitted with no listener attached — that would crash the host process for
@@ -139,6 +193,10 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     if (this.listenerCount('error') > 0) {
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  private emitReject(info: RejectInfo): void {
+    this.emit('reject', info);
   }
 
   private deliverLocally(userId: UserId, rawMessage: string): void {

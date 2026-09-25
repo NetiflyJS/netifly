@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { createNetifly } from './netiflyServer';
 import { RedisRouter } from './redisRouter';
-import type { NetiflyInstance } from './types';
+import type { CreateNetiflyOptions, NetiflyInstance } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -16,13 +16,15 @@ interface TestServer {
 }
 
 async function startTestServer(
-  resolveUserId: (req: http.IncomingMessage) => unknown
+  resolveUserId: (req: http.IncomingMessage) => unknown,
+  extra: Partial<CreateNetiflyOptions> = {}
 ): Promise<TestServer> {
   const httpServer = http.createServer((_req, res) => res.end());
   const netifly = createNetifly({
     server: httpServer,
     resolveUserId: resolveUserId as never,
     redisUrl: REDIS_URL,
+    ...extra,
   });
 
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
@@ -38,11 +40,33 @@ async function startTestServer(
   };
 }
 
-function connectClient(port: number): Promise<WebSocket> {
+function connectClient(port: number, options?: WebSocket.ClientOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`, options);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
+  });
+}
+
+// For upgrades rejected via a written HTTP response (e.g. the origin check),
+// `ws` surfaces the rejection as 'unexpected-response' with the real status
+// code, not as a generic 'error' — this resolves with that status so a test
+// can assert on it, distinct from `connectClient`'s plain rejects.toBeDefined().
+function connectExpectingRejection(
+  port: number,
+  options?: WebSocket.ClientOptions
+): Promise<{ statusCode: number | undefined }> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`, options);
+    ws.once('open', () => {
+      ws.terminate();
+      reject(new Error('expected the upgrade to be rejected, but it opened'));
+    });
+    ws.once('unexpected-response', (_req, res) => {
+      ws.terminate();
+      resolve({ statusCode: res.statusCode });
+    });
+    ws.once('error', () => resolve({ statusCode: undefined }));
   });
 }
 
@@ -96,6 +120,119 @@ describe('createNetifly', () => {
     servers.push(server);
 
     await expect(connectClient(server.port)).rejects.toBeDefined();
+  });
+
+  it('rejects a cross-origin upgrade with HTTP 403 by default (NOT-6)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-foreign');
+    servers.push(server);
+
+    const { statusCode } = await connectExpectingRejection(server.port, {
+      origin: 'https://evil.example.com',
+    });
+
+    expect(statusCode).toBe(403);
+  });
+
+  it('accepts an upgrade whose Origin host matches the request Host by default (NOT-6)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-same-host');
+    servers.push(server);
+
+    const client = await connectClient(server.port, {
+      origin: `http://127.0.0.1:${server.port}`,
+    });
+    clients.push(client);
+
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('accepts an origin listed in allowedOrigins and rejects one that is not (NOT-6)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-allowlist', {
+      allowedOrigins: ['https://app.example.com'],
+    });
+    servers.push(server);
+
+    const allowedClient = await connectClient(server.port, { origin: 'https://app.example.com' });
+    clients.push(allowedClient);
+    expect(allowedClient.readyState).toBe(WebSocket.OPEN);
+
+    const { statusCode } = await connectExpectingRejection(server.port, {
+      origin: 'https://not-listed.example.com',
+    });
+    expect(statusCode).toBe(403);
+  });
+
+  it('accepts an origin matching a RegExp entry in allowedOrigins (NOT-6)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-regexp', {
+      allowedOrigins: [/^https:\/\/[a-z]+\.example\.com$/],
+    });
+    servers.push(server);
+
+    const client = await connectClient(server.port, { origin: 'https://tenant.example.com' });
+    clients.push(client);
+
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('matches a global-flagged RegExp entry consistently across repeated connections (NOT-6)', async () => {
+    // A `g`/`y`-flagged RegExp is stateful: repeated .test() calls advance
+    // lastIndex and alternate true/false on the same input unless reset.
+    const server = await startTestServer(() => 'netiflyServer-origin-regexp-global', {
+      allowedOrigins: [/^https:\/\/tenant\.example\.com$/g],
+    });
+    servers.push(server);
+
+    for (let i = 0; i < 3; i++) {
+      const client = await connectClient(server.port, { origin: 'https://tenant.example.com' });
+      clients.push(client);
+      expect(client.readyState).toBe(WebSocket.OPEN);
+    }
+  });
+
+  it('delegates the decision to an allowedOrigins function predicate, including for missing Origin (NOT-6)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-predicate', {
+      allowedOrigins: (origin) => origin === 'https://trusted.example.com',
+    });
+    servers.push(server);
+
+    const allowed = await connectClient(server.port, { origin: 'https://trusted.example.com' });
+    clients.push(allowed);
+    expect(allowed.readyState).toBe(WebSocket.OPEN);
+
+    const { statusCode: rejectedStatus } = await connectExpectingRejection(server.port, {
+      origin: 'https://untrusted.example.com',
+    });
+    expect(rejectedStatus).toBe(403);
+
+    // No Origin header at all — the predicate still runs and rejects it,
+    // unlike the array/default forms which always allow a missing Origin.
+    const { statusCode: noOriginStatus } = await connectExpectingRejection(server.port);
+    expect(noOriginStatus).toBe(403);
+  });
+
+  it("allowedOrigins: '*' accepts any origin, including foreign ones (NOT-6)", async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-wildcard', {
+      allowedOrigins: '*',
+    });
+    servers.push(server);
+
+    const client = await connectClient(server.port, { origin: 'https://anything.example.com' });
+    clients.push(client);
+
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("emits a 'reject' event with reason 'origin' when the origin check fails (NOT-6)", async () => {
+    const server = await startTestServer(() => 'netiflyServer-origin-reject-event');
+    servers.push(server);
+
+    const rejectPromise = new Promise<{ reason: string; status: number; origin: string | undefined }>(
+      (resolve) => server.netifly.on('reject', (info) => resolve(info))
+    );
+
+    await connectExpectingRejection(server.port, { origin: 'https://evil.example.com' });
+
+    const info = await rejectPromise;
+    expect(info).toMatchObject({ reason: 'origin', status: 403, origin: 'https://evil.example.com' });
   });
 
   it('delivers a send() to a connection on the same instance', async () => {

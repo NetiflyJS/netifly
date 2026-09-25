@@ -75,14 +75,7 @@ server.listen(3000);
 
 > ⚠️ WebSocket upgrade requests bypass Express's routing/middleware entirely, so `resolveUserId` always receives the raw Node `IncomingMessage`, not an Express `Request`.
 
-> 🛡️ **Security:** WebSocket handshakes are not subject to the same-origin policy and browsers DO send cookies cross-origin on the upgrade request. If your `resolveUserId` derives identity from a cookie-based session, add an `Origin` check inside `resolveUserId` to prevent cross-site WebSocket hijacking, e.g.:
-> ```ts
-> const ALLOWED_ORIGINS = new Set(['https://app.example.com']);
-> resolveUserId: async (req) => {
->   if (!ALLOWED_ORIGINS.has(req.headers.origin ?? '')) return null;
->   return verifyJwtFromRequest(req);
-> }
-> ```
+> 🛡️ **Security:** WebSocket handshakes are not subject to the same-origin policy, and browsers DO send cookies cross-origin on the upgrade request — this is what enables cross-site WebSocket hijacking (CSWSH) when `resolveUserId` derives identity from a cookie-based session. Netifly checks `Origin` against the request's `Host` by default and rejects mismatches with `403` before `resolveUserId` runs; pass `allowedOrigins` to customize or opt out. See the [root README's Security section](https://github.com/NetiflyJS/netifly#-security) for details.
 
 ## 🔐 Redis Configuration
 

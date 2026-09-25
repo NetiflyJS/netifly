@@ -89,7 +89,7 @@ server.listen(3000);
 
 > ⚠️ WebSocket upgrade requests bypass Express's routing/middleware entirely, so `resolveUserId` always receives the raw Node `IncomingMessage`, not an Express `Request`.
 
-> 🛡️ If `resolveUserId` derives identity from a cookie-based session, read the [Security](#-security) section below before going to production — WebSocket handshakes bypass the same-origin policy, so cookie auth needs an explicit `Origin` check.
+> 🛡️ Netifly rejects cross-origin upgrades by default (see [Security](#-security) below) — if you need to accept them (e.g. a token-in-query setup, or a non-browser client that omits `Origin`), configure `allowedOrigins`.
 
 ## 🔐 Redis Configuration
 
@@ -107,24 +107,34 @@ or explicitly via the `redisUrl` option to `createNetifly()`/`attachNetifly()`, 
 
 ### Origin allowlist
 
-WebSocket handshakes are exempt from the same-origin policy, and browsers *do* send cookies cross-origin on the upgrade request. Netifly has no built-in origin check — if `resolveUserId` derives identity from a cookie-based session, you must allowlist origins yourself, inside `resolveUserId`:
+WebSocket handshakes are exempt from the same-origin policy, and browsers *do* send cookies cross-origin on the upgrade request — this is what makes cross-site WebSocket hijacking (CSWSH) possible if `resolveUserId` derives identity from a cookie-based session. Netifly checks the `Origin` header **before** `resolveUserId` ever runs, so a forged cross-site request never reaches your auth code.
+
+By default (no `allowedOrigins` option), Netifly only accepts an `Origin` that matches the request's `Host` header, and rejects everything else with `403 Forbidden`. Non-browser clients that omit `Origin` entirely (raw `ws` clients, server-to-server calls) are allowed through, since they aren't subject to CSWSH.
+
+> ⚠️ **Breaking change:** earlier versions performed no Origin check at all. If your `Origin` legitimately differs from your `Host` — e.g. a reverse proxy or CDN in front that doesn't forward the original `Host`, or your WebSocket endpoint lives on a different subdomain than your app — upgrading will start rejecting those connections until you set `allowedOrigins` explicitly.
+
+To customize this, pass `allowedOrigins` to `createNetifly()`/`attachNetifly()`:
 
 ```ts
-const ALLOWED_ORIGINS = new Set(['https://app.example.com']);
-resolveUserId: async (req) => {
-  if (!ALLOWED_ORIGINS.has(req.headers.origin ?? '')) return null;
-  return verifyJwtFromRequest(req);
-}
+// An explicit allowlist — strings match exactly, RegExp is tested against the header
+allowedOrigins: ['https://app.example.com', /^https:\/\/[a-z]+\.example\.com$/]
+
+// Or a predicate for full control (including rejecting a missing Origin)
+allowedOrigins: (origin) => origin !== undefined && origin.endsWith('.example.com')
+
+// Opt out entirely — e.g. for a token-in-query setup where CSWSH doesn't apply.
+// Only do this if resolveUserId does NOT rely on cookies.
+allowedOrigins: '*'
 ```
 
-Returning a falsy value from `resolveUserId` rejects the connection — Netifly destroys the socket immediately.
+Rejections emit a `reject` event: `netifly.on('reject', ({ reason, status, origin }) => { ... })`.
 
 ### Cookie vs. token auth
 
-- **Cookie-based sessions** are convenient but exposed to cross-site WebSocket hijacking (see above) — an Origin check is not optional if you use them.
+- **Cookie-based sessions** are convenient but exposed to cross-site WebSocket hijacking — the Origin allowlist above is your defense if you use them.
 - **Bearer tokens** (e.g. a short-lived JWT read from a query param or the `Sec-WebSocket-Protocol` header) sidestep cross-origin cookie replay entirely, since the browser only attaches them if your client code puts them there. This is the safer default if you control the client.
 
-Either way, enforcement happens inside `resolveUserId` — Netifly is auth-agnostic and never inspects cookies, headers, or tokens itself.
+Beyond the Origin check, enforcement happens inside `resolveUserId` — Netifly never inspects cookies or tokens itself. Returning a falsy value from `resolveUserId` rejects the connection.
 
 ### Limits
 
@@ -167,13 +177,14 @@ Non-Node publishers (e.g. publishing directly to a Netifly Redis channel from an
 | `resolveUserId` | `(req) => string \| null \| undefined \| Promise<...>` | ✅ | Identifies the connecting user. Returning a falsy value rejects the connection. |
 | `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Netifly throws at construction time if neither is set (no default/local fallback). |
 | `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
+| `allowedOrigins` | `(string \| RegExp)[] \| ((origin: string \| undefined) => boolean) \| '*'` | — | Controls the CSWSH origin check (see [Security](#-security)). Defaults to same-host only. |
 
 Returns a `NetiflyInstance`:
 
 - `send<T>(userId, payload: T): Promise<void>` — wraps `payload` as `{ v, id, type: "message", data: payload, ts }` (see [Message Envelope](#message-envelope)) and delivers it to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
 - `send<T>(userId, type: string, data: T): Promise<void>` — same delivery semantics, but wraps as `{ v, id, type, data, ts }` with the `type` you provide instead of the `"message"` default.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
-- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
+- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, origin, req }) => void)` — `reject` fires when the Origin check rejects an upgrade. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
 ### `attachNetifly(app, options)` — `@netiflyjs/express`
