@@ -1,3 +1,10 @@
+# [@netiflyjs/core-v1.2.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.1.0...@netiflyjs/core-v1.2.0) (2026-09-25)
+
+
+### Features
+
+* rename Notifly to Netifly across public API and docs ([7c7473d](https://github.com/NetiflyJS/netifly/commit/7c7473dc5bf3769acc6e795653fe027b7c6a28e0))
+
 # [@netiflyjs/core-v1.1.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.0.1...@netiflyjs/core-v1.1.0) (2026-09-25)
 
 
