@@ -1,6 +1,6 @@
 {
   "name": "@netiflyjs/express",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Express adapter for @netiflyjs/core — real-time per-user WebSocket notifications backed by Redis.",
   "license": "MIT",
   "repository": {

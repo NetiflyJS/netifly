@@ -1,3 +1,10 @@
+# [@netiflyjs/express-v1.3.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.2.0...@netiflyjs/express-v1.3.0) (2026-09-25)
+
+
+### Features
+
+* add message envelop ([eed4a1b](https://github.com/NetiflyJS/netifly/commit/eed4a1bfe6ff314f52b8916170666940e509d9cd))
+
 # [@netiflyjs/express-v1.2.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.1.0...@netiflyjs/express-v1.2.0) (2026-09-25)
 
 
