@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and Redis.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NetiflyJS/netifly.git",
+    "directory": "packages/core"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

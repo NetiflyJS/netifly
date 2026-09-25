@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/notifly-mark-on-dark.svg">
-    <img src="assets/brand/notifly-mark.svg" alt="Notifly" width="96">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NetiflyJS/netifly/main/assets/brand/notifly-mark-on-dark.svg">
+    <img src="https://raw.githubusercontent.com/NetiflyJS/netifly/main/assets/brand/notifly-mark.svg" alt="Notifly" width="96">
   </picture>
 </p>
 

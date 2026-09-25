@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "description": "Express adapter for @netiflyjs/core — real-time per-user WebSocket notifications backed by Redis.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NetiflyJS/netifly.git",
+    "directory": "packages/express"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
