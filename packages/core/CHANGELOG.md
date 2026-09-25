@@ -1,3 +1,10 @@
+# [@netiflyjs/core-v1.4.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.3.1...@netiflyjs/core-v1.4.0) (2026-09-25)
+
+
+### Features
+
+* **core:** add Origin allowlist to prevent cross-site WebSocket hijacking ([0791ed5](https://github.com/NetiflyJS/netifly/commit/0791ed59d4fab99f29b5086d88c00b24f9d6b72f))
+
 # [@netiflyjs/core-v1.3.1](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.3.0...@netiflyjs/core-v1.3.1) (2026-09-25)
 
 
