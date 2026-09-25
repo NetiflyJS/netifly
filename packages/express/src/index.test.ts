@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import WebSocket from 'ws';
 import { attachNotifly } from './index';
-import type { NotiflyInstance } from '@notiflyjs/core';
+import type { NotiflyInstance } from '@netiflyjs/core';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 

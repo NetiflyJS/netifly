@@ -1,8 +1,8 @@
 // packages/express/src/index.ts
 import http from 'node:http';
 import type { Express } from 'express';
-import { createNotifly } from '@notiflyjs/core';
-import type { CreateNotiflyOptions, NotiflyInstance } from '@notiflyjs/core';
+import { createNotifly } from '@netiflyjs/core';
+import type { CreateNotiflyOptions, NotiflyInstance } from '@netiflyjs/core';
 
 export interface AttachNotiflyOptions extends Omit<CreateNotiflyOptions, 'server'> {
   server?: http.Server;
