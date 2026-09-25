@@ -45,7 +45,8 @@ describe('attachNetifly', () => {
       ws.once('message', (data) => resolve(data.toString()));
     });
     await netifly.send('netiflyExpress-eve', { hello: 'express' });
-    await expect(messagePromise).resolves.toBe(JSON.stringify({ hello: 'express' }));
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ hello: 'express' });
 
     ws.close();
     await netifly.close();

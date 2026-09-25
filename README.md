@@ -24,6 +24,7 @@ Framework-agnostic, real-time per-user notifications for Node.js servers — Web
 - 🔐 **Auth-agnostic** — you supply a `resolveUserId` function; Netifly doesn't care how you authenticate.
 - 💓 **Dead-connection reaping** — a ping/pong heartbeat terminates clients that silently disappeared.
 - 🧩 **Zero opinions on payload shape** — send whatever JSON-serializable data your app needs.
+- ✉️ **Stable message envelope** — every message is wrapped in a small `{ v, id, type, data, ts }` envelope with a server-generated, sortable id.
 
 ## 🆚 Why Netifly vs. Socket.IO / Pusher
 
@@ -62,7 +63,7 @@ const netifly = createNetifly({
 server.listen(3000);
 
 // Anywhere in your app:
-netifly.send(userId, { type: 'comment.created', payload: { commentId: 42 } });
+netifly.send(userId, 'comment.created', { commentId: 42 });
 ```
 
 ### Express
@@ -79,7 +80,7 @@ const { server, netifly } = attachNetifly(app, {
 
 app.post('/comments', (req, res) => {
   const comment = createComment(req.body);
-  netifly.send(comment.authorId, { type: 'comment.created', payload: comment });
+  netifly.send(comment.authorId, 'comment.created', comment);
   res.status(201).json(comment);
 });
 
@@ -132,6 +133,29 @@ Netifly ships with no built-in rate limiting, per-user connection caps, or messa
 - **Connections per user** — reject in `resolveUserId` (e.g. check a counter you maintain in Redis) once a user already holds too many open sockets.
 - **Message rate / size** — validate before calling `send()`, or front the upgrade endpoint with a reverse proxy or API gateway that enforces connection and body-size limits.
 - **`disconnect(userId)` is local-only** (see [API Reference](#-api-reference)) — it is not a substitute for revoking a compromised session cluster-wide; prefer short-lived tokens `resolveUserId` can reject once revoked.
+## ✉️ Message Envelope
+
+This is a **public wire contract**: every message Netifly delivers over the WebSocket — regardless of which `send()` overload produced it — is wrapped in this envelope:
+
+```json
+{
+  "v": 1,
+  "id": "01J6ZQK6NQK4WQ1G7F1QK1TCP0",
+  "type": "comment.created",
+  "data": { "commentId": 42 },
+  "ts": 1727180000000
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `v` | `number` | Envelope format version. Currently always `1`. Lets the wire format evolve without breaking existing consumers. |
+| `id` | `string` | A server-generated [ULID](https://github.com/ulid/spec) — lexicographically sortable by creation time, useful for dedupe and future replay (`lastEventId`). Guaranteed unique and strictly increasing for sends issued by the same server instance, including multiple sends within the same millisecond. Ordering is **not** guaranteed across different server instances in a cluster, since each instance generates its own ids. |
+| `type` | `string` | The event name. Set explicitly via `send(userId, type, data)`, or defaults to `"message"` when using `send(userId, payload)`. |
+| `data` | `T` | Your payload, whatever JSON-serializable shape it is. |
+| `ts` | `number` | Server timestamp (`Date.now()`) at the moment the envelope was created, in epoch milliseconds. |
+
+Non-Node publishers (e.g. publishing directly to a Netifly Redis channel from another language) should produce messages in this exact shape so clients can parse them consistently.
 
 ## 📖 API Reference
 
@@ -146,7 +170,8 @@ Netifly ships with no built-in rate limiting, per-user connection caps, or messa
 
 Returns a `NetiflyInstance`:
 
-- `send(userId, payload): Promise<void>` — delivers `payload` to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
+- `send<T>(userId, payload: T): Promise<void>` — wraps `payload` as `{ v, id, type: "message", data: payload, ts }` (see [Message Envelope](#message-envelope)) and delivers it to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
+- `send<T>(userId, type: string, data: T): Promise<void>` — same delivery semantics, but wraps as `{ v, id, type, data, ts }` with the `type` you provide instead of the `"message"` default.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
