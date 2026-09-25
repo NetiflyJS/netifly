@@ -20,6 +20,12 @@ function userIdFromChannel(channel: string): UserId | null {
 export class RedisRouter {
   private readonly publisher: Redis;
   private readonly subscriber: Redis;
+  // Multiple callers (e.g. two WebSocket connections for the same user) can
+  // subscribe on behalf of the same userId concurrently. Ref-counting here,
+  // rather than relying on callers to know whether anyone else still wants
+  // the channel, is what makes subscribe/unsubscribe safe to call once per
+  // caller in any interleaving — see NOT-5.
+  private readonly refCounts = new Map<UserId, number>();
 
   constructor(options: RedisRouterOptions) {
     this.publisher = new Redis(options.redisUrl);
@@ -47,11 +53,30 @@ export class RedisRouter {
   }
 
   async subscribe(userId: UserId): Promise<void> {
-    await this.subscriber.subscribe(channelName(userId));
+    const count = this.refCounts.get(userId) ?? 0;
+    this.refCounts.set(userId, count + 1);
+    if (count > 0) return; // someone else already holds this channel open
+
+    try {
+      await this.subscriber.subscribe(channelName(userId));
+    } catch (error) {
+      const current = this.refCounts.get(userId) ?? 1;
+      if (current <= 1) this.refCounts.delete(userId);
+      else this.refCounts.set(userId, current - 1);
+      throw error;
+    }
   }
 
   async unsubscribe(userId: UserId): Promise<void> {
-    await this.subscriber.unsubscribe(channelName(userId));
+    const count = this.refCounts.get(userId) ?? 0;
+    if (count <= 1) {
+      this.refCounts.delete(userId);
+      if (count === 1) {
+        await this.subscriber.unsubscribe(channelName(userId));
+      }
+      return;
+    }
+    this.refCounts.set(userId, count - 1);
   }
 
   async publish(userId: UserId, payload: unknown): Promise<void> {

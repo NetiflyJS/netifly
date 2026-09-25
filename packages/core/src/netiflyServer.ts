@@ -27,11 +27,7 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     this.resolveUserId = options.resolveUserId;
     this.path = options.path ?? DEFAULT_PATH;
 
-    this.registry = new ConnectionRegistry<WebSocket>({
-      onLastDisconnect: (userId) => {
-        this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
-      },
-    });
+    this.registry = new ConnectionRegistry<WebSocket>({});
 
     const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
     if (!redisUrl) {
@@ -85,12 +81,18 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   // Awaiting the Redis SUBSCRIBE before registering the connection (rather
   // than firing it in the background) minimizes the window where a send()
   // that races a brand-new connection would be dropped.
+  //
+  // Every connection subscribes and unsubscribes for itself exactly once,
+  // regardless of how many other connections exist for the same user:
+  // RedisRouter ref-counts subscriptions per userId, so overlapping
+  // connections can never unsubscribe out from under one another (NOT-5).
+  // ConnectionRegistry state is deliberately not consulted here — it only
+  // reflects fully-registered connections, not ones still mid-subscribe.
   private async registerConnection(userId: UserId, ws: WebSocket): Promise<void> {
-    // Tracks whether this connection actually made it into the registry, so
-    // the 'close' listener below never emits 'disconnect' without a matching
-    // prior 'connect' (e.g. when the socket dies before registration
-    // completes).
-    let registered = false;
+    // Tracks whether this connection's subscribe is "ours to unsubscribe" —
+    // i.e. whether the 'close' listener below still needs to pair it with an
+    // unsubscribe(), or whether the post-await code already handled it.
+    let subscribed = false;
 
     // Attached before the subscribe await below so that a socket which
     // disconnects during that window is still observed: without these
@@ -99,37 +101,31 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     ws.on('error', (error) => this.emitError(error));
     ws.on('close', () => {
       this.registry.remove(userId, ws);
-      if (registered) {
+      if (subscribed) {
+        subscribed = false;
         this.emit('disconnect', userId);
+        this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
       }
     });
 
-    const needsSubscribe = !this.registry.hasConnections(userId);
-    if (needsSubscribe) {
-      try {
-        await this.router.subscribe(userId);
-      } catch (error) {
-        this.emitError(error);
-        ws.terminate();
-        return;
-      }
-    }
-
-    if (ws.readyState !== WebSocket.OPEN) {
-      // The socket closed while we were awaiting the SUBSCRIBE above. Its
-      // 'close' listener already ran registry.remove (a no-op, since we
-      // hadn't added it yet). If we just created a brand-new subscription
-      // for this user on its behalf, undo it now so it doesn't leak — unless
-      // another connection for the same user registered in the meantime, in
-      // which case unsubscribing here would pull the rug out from under it.
-      if (needsSubscribe && !this.registry.hasConnections(userId)) {
-        this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
-      }
+    try {
+      await this.router.subscribe(userId);
+    } catch (error) {
+      this.emitError(error);
+      ws.terminate();
       return;
     }
 
+    if (ws.readyState !== WebSocket.OPEN) {
+      // Closed while the SUBSCRIBE was in flight. The 'close' listener above
+      // already ran (before `subscribed` was set, so it didn't pair an
+      // unsubscribe) — do it here instead.
+      this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
+      return;
+    }
+
+    subscribed = true;
     this.registry.add(userId, ws);
-    registered = true;
     this.emit('connect', userId);
   }
 
