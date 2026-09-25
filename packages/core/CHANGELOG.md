@@ -5,6 +5,13 @@
 
 * use absolute logo URL and add repository field to packages ([371aec3](https://github.com/NetiflyJS/netifly/commit/371aec369b74287cddbb49ac47a661a151bab8ee))
 
+# [@netiflyjs/core-v1.0.1](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.0.0...@netiflyjs/core-v1.0.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* use absolute logo URL and add repository field to packages ([371aec3](https://github.com/NetiflyJS/netifly/commit/371aec369b74287cddbb49ac47a661a151bab8ee))
+
 # @netiflyjs/core-v1.0.0 (2026-09-25)
 
 
