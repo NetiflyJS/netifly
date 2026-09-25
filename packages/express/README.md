@@ -1,11 +1,11 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/notifly-mark-on-dark.svg">
-    <img src="/assets/brand/notifly-mark.svg" alt="Notifly" width="96">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/netifly-mark-on-dark.svg">
+    <img src="/assets/brand/netifly-mark.svg" alt="Netifly" width="96">
   </picture>
 </p>
 
-<h1 align="center">notifly</h1>
+<h1 align="center">netifly</h1>
 
 Framework-agnostic, real-time per-user notifications for Node.js servers — WebSockets in, Redis pub/sub for horizontal scaling.
 
@@ -19,7 +19,7 @@ Framework-agnostic, real-time per-user notifications for Node.js servers — Web
 - 🔌 **Framework-agnostic core** — attaches to any Node `http.Server`, so it works under Express, Fastify, Koa, NestJS, or raw `http`.
 - ⚡ **Express adapter** (`@netiflyjs/express`) for a one-line setup.
 - 🔁 **Horizontally scalable** — any number of server instances stay in sync through Redis pub/sub, no sticky sessions required.
-- 🔐 **Auth-agnostic** — you supply a `resolveUserId` function; Notifly doesn't care how you authenticate.
+- 🔐 **Auth-agnostic** — you supply a `resolveUserId` function; Netifly doesn't care how you authenticate.
 - 💓 **Dead-connection reaping** — a ping/pong heartbeat terminates clients that silently disappeared.
 - 🧩 **Zero opinions on payload shape** — send whatever JSON-serializable data your app needs.
 
@@ -37,11 +37,11 @@ npm install @netiflyjs/core @netiflyjs/express
 
 ```ts
 import http from 'node:http';
-import { createNotifly } from '@netiflyjs/core';
+import { createNetifly } from '@netiflyjs/core';
 
 const server = http.createServer((req, res) => res.end('ok'));
 
-const notifly = createNotifly({
+const netifly = createNetifly({
   server,
   resolveUserId: async (req) => verifyJwtFromRequest(req), // your own auth
 });
@@ -49,24 +49,24 @@ const notifly = createNotifly({
 server.listen(3000);
 
 // Anywhere in your app:
-notifly.send(userId, { type: 'comment.created', payload: { commentId: 42 } });
+netifly.send(userId, { type: 'comment.created', payload: { commentId: 42 } });
 ```
 
 ### Express
 
 ```ts
 import express from 'express';
-import { attachNotifly } from '@netiflyjs/express';
+import { attachNetifly } from '@netiflyjs/express';
 
 const app = express();
 
-const { server, notifly } = attachNotifly(app, {
+const { server, netifly } = attachNetifly(app, {
   resolveUserId: async (req) => verifyJwtFromRequest(req),
 });
 
 app.post('/comments', (req, res) => {
   const comment = createComment(req.body);
-  notifly.send(comment.authorId, { type: 'comment.created', payload: comment });
+  netifly.send(comment.authorId, { type: 'comment.created', payload: comment });
   res.status(201).json(comment);
 });
 
@@ -86,7 +86,7 @@ server.listen(3000);
 
 ## 🔐 Redis Configuration
 
-Notifly requires a Redis connection string — never hardcode credentials. Provide it either as an environment variable:
+Netifly requires a Redis connection string — never hardcode credentials. Provide it either as an environment variable:
 
 ```bash
 REDIS_URL=redis://:password@host:6379/0
@@ -94,29 +94,29 @@ REDIS_URL=redis://:password@host:6379/0
 REDIS_URL=rediss://user:password@host:6380/0
 ```
 
-or explicitly via the `redisUrl` option to `createNotifly()`/`attachNotifly()`, which takes priority over the env var. There is **no default/fallback connection** — if neither `redisUrl` nor `REDIS_URL` is provided, `createNotifly()`/`attachNotifly()` throws a clear error immediately rather than silently connecting to a local Redis instance.
+or explicitly via the `redisUrl` option to `createNetifly()`/`attachNetifly()`, which takes priority over the env var. There is **no default/fallback connection** — if neither `redisUrl` nor `REDIS_URL` is provided, `createNetifly()`/`attachNetifly()` throws a clear error immediately rather than silently connecting to a local Redis instance.
 
 ## 📖 API Reference
 
-### `createNotifly(options)` — `@netiflyjs/core`
+### `createNetifly(options)` — `@netiflyjs/core`
 
 | Option | Type | Required | Description |
 | --- | --- | --- | --- |
 | `server` | `http.Server` | ✅ | The server to attach the WebSocket upgrade handler to. |
 | `resolveUserId` | `(req) => string \| null \| undefined \| Promise<...>` | ✅ | Identifies the connecting user. Returning a falsy value rejects the connection. |
-| `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Notifly throws at construction time if neither is set (no default/local fallback). |
-| `path` | `string` | — | WebSocket upgrade path. Defaults to `/notifly`. |
+| `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Netifly throws at construction time if neither is set (no default/local fallback). |
+| `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
 
-Returns a `NotiflyInstance`:
+Returns a `NetiflyInstance`:
 
 - `send(userId, payload): Promise<void>` — delivers `payload` to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
-- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`. **Attaching an `'error'` listener is effectively required for production use** — Notifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
+- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
-### `attachNotifly(app, options)` — `@netiflyjs/express`
+### `attachNetifly(app, options)` — `@netiflyjs/express`
 
-Same `options` as `createNotifly`, minus `server` (optional — pass your own, or let it create one from the Express app). Returns `{ server, notifly }`.
+Same `options` as `createNetifly`, minus `server` (optional — pass your own, or let it create one from the Express app). Returns `{ server, netifly }`.
 
 ## 🏗️ Architecture
 
@@ -126,7 +126,7 @@ Client B ──WS──► Server Instance 2 ──┼──► Redis (pub/sub, 
 Client C ──WS──► Server Instance 3 ──┘
 ```
 
-Each instance subscribes to a user's Redis channel (`notifly:user:<id>`) only while it holds a live connection for that user, and unsubscribes the moment that user disconnects locally — so `send()` traffic only reaches the instance(s) that actually need it.
+Each instance subscribes to a user's Redis channel (`netifly:user:<id>`) only while it holds a live connection for that user, and unsubscribes the moment that user disconnects locally — so `send()` traffic only reaches the instance(s) that actually need it.
 
 ## 🧪 Testing & Development
 

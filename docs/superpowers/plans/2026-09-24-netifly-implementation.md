@@ -1,14 +1,14 @@
-# Notifly Implementation Plan
+# Netifly Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and publish `@notifly/core` and `@notifly/express` — a framework-agnostic, WebSocket + Redis pub/sub notification library for Node.js servers, with full CI and semantic-release automation.
+**Goal:** Build and publish `@netifly/core` and `@netifly/express` — a framework-agnostic, WebSocket + Redis pub/sub notification library for Node.js servers, with full CI and semantic-release automation.
 
-**Architecture:** A pnpm workspace monorepo with two TypeScript packages. `@notifly/core` attaches a `ws` WebSocket server to any `http.Server`, tracks per-instance connections in memory, and coordinates cross-instance delivery through `ioredis` using one Redis pub/sub channel per user (`notifly:user:<id>`), subscribed to only while that instance holds a live connection for that user. `@notifly/express` is a thin convenience wrapper that creates/reuses an Express app's `http.Server` and wires it to `@notifly/core`.
+**Architecture:** A pnpm workspace monorepo with two TypeScript packages. `@netifly/core` attaches a `ws` WebSocket server to any `http.Server`, tracks per-instance connections in memory, and coordinates cross-instance delivery through `ioredis` using one Redis pub/sub channel per user (`netifly:user:<id>`), subscribed to only while that instance holds a live connection for that user. `@netifly/express` is a thin convenience wrapper that creates/reuses an Express app's `http.Server` and wires it to `@netifly/core`.
 
 **Tech Stack:** TypeScript, `ws`, `ioredis`, Jest + `ts-jest`, pnpm workspaces, GitHub Actions, `semantic-release` + `semantic-release-monorepo`.
 
-**Spec:** [docs/superpowers/specs/2026-09-24-notifly-design.md](../specs/2026-09-24-notifly-design.md)
+**Spec:** [docs/superpowers/specs/2026-09-24-netifly-design.md](../specs/2026-09-24-netifly-design.md)
 
 ## Global Constraints
 
@@ -16,13 +16,13 @@
 - Delivery is fire-and-forget: no persistence, replay, or acknowledgement (spec §3).
 - All source is TypeScript, compiled to JS + `.d.ts` for publishing (spec §7).
 - Monorepo uses **pnpm workspaces** (spec §2 decisions).
-- Packages publish under the **`@notifly`** npm scope: `@notifly/core`, `@notifly/express` (spec §7).
+- Packages publish under the **`@netifly`** npm scope: `@netifly/core`, `@netifly/express` (spec §7).
 - License is **MIT** (spec §7).
 - Minimum supported Node.js version is **>=18** (resolves spec §12 open item).
-- The WebSocket upgrade path defaults to **`/notifly`**, configurable via a `path` option (resolves spec §12 open item).
+- The WebSocket upgrade path defaults to **`/netifly`**, configurable via a `path` option (resolves spec §12 open item).
 - `resolveUserId` receives the raw `http.IncomingMessage` from the WS upgrade event, not a framework request object — Express middleware does not run on upgrade requests, since upgrades bypass the HTTP routing layer entirely (resolves spec §12 open item).
 - Redis access uses `ioredis` with **two connections per instance** (one dedicated subscriber, one publisher) (spec §4.3).
-- Redis routing uses **per-user channels** (`notifly:user:<userId>`), subscribed to only while an instance holds at least one local connection for that user (spec §4.2).
+- Redis routing uses **per-user channels** (`netifly:user:<userId>`), subscribed to only while an instance holds at least one local connection for that user (spec §4.2).
 
 ## Review Focus
 
@@ -52,7 +52,7 @@
 
 ```json
 {
-  "name": "notifly",
+  "name": "netifly",
   "private": true,
   "license": "MIT",
   "packageManager": "pnpm@9.7.0",
@@ -181,7 +181,7 @@ git commit -m "chore: scaffold pnpm workspace, tooling, and license"
 
 ---
 
-## Task 2: `@notifly/core` Scaffold + ConnectionRegistry
+## Task 2: `@netifly/core` Scaffold + ConnectionRegistry
 
 **Files:**
 - Create: `packages/core/package.json`
@@ -197,7 +197,7 @@ git commit -m "chore: scaffold pnpm workspace, tooling, and license"
 
 ```json
 {
-  "name": "@notifly/core",
+  "name": "@netifly/core",
   "version": "0.0.0",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and Redis.",
   "license": "MIT",
@@ -328,7 +328,7 @@ describe('ConnectionRegistry', () => {
 
 - [ ] **Step 5: Run test to verify it fails**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: FAIL — `Cannot find module './connectionRegistry'`
 
 - [ ] **Step 6: Write minimal implementation**
@@ -391,7 +391,7 @@ export class ConnectionRegistry<TConnection> {
 
 - [ ] **Step 7: Run test to verify it passes**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: PASS (7 tests)
 
 - [ ] **Step 8: Commit**
@@ -403,7 +403,7 @@ git commit -m "feat(core): add connection registry with refcounted lifecycle hoo
 
 ---
 
-## Task 3: `@notifly/core` RedisRouter
+## Task 3: `@netifly/core` RedisRouter
 
 **Requires:** a local Redis reachable at `redis://127.0.0.1:6379` while running this task's tests (e.g. `docker run --rm -p 6379:6379 redis:7-alpine`).
 
@@ -420,7 +420,7 @@ git commit -m "feat(core): add connection registry with refcounted lifecycle hoo
 
 ```json
 {
-  "name": "@notifly/core",
+  "name": "@netifly/core",
   "version": "0.0.0",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and Redis.",
   "license": "MIT",
@@ -465,7 +465,7 @@ jest.setTimeout(15000);
 
 describe('channelName', () => {
   it('formats the per-user channel name', () => {
-    expect(channelName('alice')).toBe('notifly:user:alice');
+    expect(channelName('alice')).toBe('netifly:user:alice');
   });
 });
 
@@ -535,7 +535,7 @@ describe('RedisRouter', () => {
     circular.self = circular;
 
     await expect(publisherRouter.publish('zoe', circular)).rejects.toThrow(
-      'Notifly: payload for user "zoe" is not JSON-serializable'
+      'Netifly: payload for user "zoe" is not JSON-serializable'
     );
   });
 
@@ -564,7 +564,7 @@ describe('RedisRouter', () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: FAIL — `Cannot find module './redisRouter'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -580,7 +580,7 @@ export interface RedisRouterOptions {
   onError?: (error: Error) => void;
 }
 
-const CHANNEL_PREFIX = 'notifly:user:';
+const CHANNEL_PREFIX = 'netifly:user:';
 
 export function channelName(userId: UserId): string {
   return `${CHANNEL_PREFIX}${userId}`;
@@ -624,7 +624,7 @@ export class RedisRouter {
     try {
       serialized = JSON.stringify(payload);
     } catch (error) {
-      throw new Error(`Notifly: payload for user "${userId}" is not JSON-serializable`, {
+      throw new Error(`Netifly: payload for user "${userId}" is not JSON-serializable`, {
         cause: error,
       });
     }
@@ -640,7 +640,7 @@ export class RedisRouter {
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: PASS (6 tests). Requires local Redis on `127.0.0.1:6379`.
 
 - [ ] **Step 6: Commit**
@@ -652,7 +652,7 @@ git commit -m "feat(core): add Redis pub/sub router with per-user channels"
 
 ---
 
-## Task 4: `@notifly/core` Heartbeat Helper
+## Task 4: `@netifly/core` Heartbeat Helper
 
 **Files:**
 - Modify: `packages/core/package.json` (add `ws` dependency + `@types/ws` dev dependency)
@@ -667,7 +667,7 @@ git commit -m "feat(core): add Redis pub/sub router with per-user channels"
 
 ```json
 {
-  "name": "@notifly/core",
+  "name": "@netifly/core",
   "version": "0.0.0",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and Redis.",
   "license": "MIT",
@@ -779,7 +779,7 @@ describe('startHeartbeat', () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: FAIL — `Cannot find module './heartbeat'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -815,7 +815,7 @@ export function startHeartbeat(options: HeartbeatOptions): NodeJS.Timeout {
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: PASS (4 tests)
 
 - [ ] **Step 6: Commit**
@@ -827,35 +827,35 @@ git commit -m "feat(core): add ping/pong heartbeat to reap dead connections"
 
 ---
 
-## Task 5: `@notifly/core` `createNotifly` (NotiflyServer Integration)
+## Task 5: `@netifly/core` `createNetifly` (NetiflyServer Integration)
 
 **Requires:** local Redis on `redis://127.0.0.1:6379`.
 
 **Files:**
 - Create: `packages/core/src/types.ts`
-- Create: `packages/core/src/notiflyServer.ts`
-- Test: `packages/core/src/notiflyServer.test.ts`
+- Create: `packages/core/src/netiflyServer.ts`
+- Test: `packages/core/src/netiflyServer.test.ts`
 
 **Interfaces:**
 - Consumes: `ConnectionRegistry` (Task 2), `RedisRouter`/`channelName` (Task 3), `startHeartbeat` (Task 4).
-- Produces: `createNotifly(options: CreateNotiflyOptions): NotiflyInstance` from `./notiflyServer`; types `UserId`, `ResolveUserId`, `CreateNotiflyOptions`, `NotiflyInstance` from `./types`.
+- Produces: `createNetifly(options: CreateNetiflyOptions): NetiflyInstance` from `./netiflyServer`; types `UserId`, `ResolveUserId`, `CreateNetiflyOptions`, `NetiflyInstance` from `./types`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// packages/core/src/notiflyServer.test.ts
+// packages/core/src/netiflyServer.test.ts
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
-import { createNotifly } from './notiflyServer';
-import type { NotiflyInstance } from './types';
+import { createNetifly } from './netiflyServer';
+import type { NetiflyInstance } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
 jest.setTimeout(15000);
 
 interface TestServer {
-  notifly: NotiflyInstance;
+  netifly: NetiflyInstance;
   port: number;
   close: () => Promise<void>;
 }
@@ -864,7 +864,7 @@ async function startTestServer(
   resolveUserId: (req: http.IncomingMessage) => unknown
 ): Promise<TestServer> {
   const httpServer = http.createServer((_req, res) => res.end());
-  const notifly = createNotifly({
+  const netifly = createNetifly({
     server: httpServer,
     resolveUserId: resolveUserId as never,
     redisUrl: REDIS_URL,
@@ -874,10 +874,10 @@ async function startTestServer(
   const port = (httpServer.address() as AddressInfo).port;
 
   return {
-    notifly,
+    netifly,
     port,
     close: async () => {
-      await notifly.close();
+      await netifly.close();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
   };
@@ -885,7 +885,7 @@ async function startTestServer(
 
 function connectClient(port: number): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/notifly`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
@@ -901,7 +901,7 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe('createNotifly', () => {
+describe('createNetifly', () => {
   const servers: TestServer[] = [];
   const clients: WebSocket[] = [];
 
@@ -944,7 +944,7 @@ describe('createNotifly', () => {
     await wait(100); // allow the initial Redis SUBSCRIBE to be acknowledged
 
     const messagePromise = nextMessage(client);
-    await server.notifly.send('alice', { type: 'greeting', text: 'hi' });
+    await server.netifly.send('alice', { type: 'greeting', text: 'hi' });
 
     await expect(messagePromise).resolves.toBe(JSON.stringify({ type: 'greeting', text: 'hi' }));
   });
@@ -959,7 +959,7 @@ describe('createNotifly', () => {
     await wait(100);
 
     const messagePromise = nextMessage(client);
-    await serverA.notifly.send('bob', { type: 'cross-instance' });
+    await serverA.netifly.send('bob', { type: 'cross-instance' });
 
     await expect(messagePromise).resolves.toBe(JSON.stringify({ type: 'cross-instance' }));
   });
@@ -975,7 +975,7 @@ describe('createNotifly', () => {
 
     const messageA = nextMessage(clientA);
     const messageB = nextMessage(clientB);
-    await server.notifly.send('frank', { type: 'multi-tab' });
+    await server.netifly.send('frank', { type: 'multi-tab' });
 
     await expect(messageA).resolves.toBe(JSON.stringify({ type: 'multi-tab' }));
     await expect(messageB).resolves.toBe(JSON.stringify({ type: 'multi-tab' }));
@@ -985,7 +985,7 @@ describe('createNotifly', () => {
     const server = await startTestServer(() => 'carol');
     servers.push(server);
 
-    await expect(server.notifly.send('nobody-online', { type: 'x' })).resolves.toBeUndefined();
+    await expect(server.netifly.send('nobody-online', { type: 'x' })).resolves.toBeUndefined();
   });
 
   it("disconnect() closes all of a user's local connections", async () => {
@@ -997,7 +997,7 @@ describe('createNotifly', () => {
     await wait(100);
 
     const closePromise = new Promise<void>((resolve) => client.once('close', () => resolve()));
-    server.notifly.disconnect('dave');
+    server.netifly.disconnect('dave');
 
     await closePromise;
   });
@@ -1006,9 +1006,9 @@ describe('createNotifly', () => {
     const server = await startTestServer(() => 'gina');
     servers.push(server);
 
-    await server.notifly.close();
-    await expect(server.notifly.send('gina', { type: 'x' })).rejects.toThrow(
-      'Notifly: cannot send after close()'
+    await server.netifly.close();
+    await expect(server.netifly.send('gina', { type: 'x' })).rejects.toThrow(
+      'Netifly: cannot send after close()'
     );
 
     servers.pop(); // already closed above; skip afterEach double-close
@@ -1018,8 +1018,8 @@ describe('createNotifly', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @notifly/core test`
-Expected: FAIL — `Cannot find module './notiflyServer'`
+Run: `pnpm --filter @netifly/core test`
+Expected: FAIL — `Cannot find module './netiflyServer'`
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -1033,14 +1033,14 @@ export type ResolveUserId = (
   req: IncomingMessage
 ) => UserId | null | undefined | Promise<UserId | null | undefined>;
 
-export interface CreateNotiflyOptions {
+export interface CreateNetiflyOptions {
   server: HttpServer;
   resolveUserId: ResolveUserId;
   redisUrl?: string;
   path?: string;
 }
 
-export interface NotiflyInstance {
+export interface NetiflyInstance {
   send(userId: UserId, payload: unknown): Promise<void>;
   disconnect(userId: UserId): void;
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
@@ -1050,7 +1050,7 @@ export interface NotiflyInstance {
 ```
 
 ```ts
-// packages/core/src/notiflyServer.ts
+// packages/core/src/netiflyServer.ts
 import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
@@ -1058,21 +1058,21 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
-import type { CreateNotiflyOptions, NotiflyInstance, UserId } from './types';
+import type { CreateNetiflyOptions, NetiflyInstance, UserId } from './types';
 
-const DEFAULT_PATH = '/notifly';
+const DEFAULT_PATH = '/netifly';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
-class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
+class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private readonly wss: WebSocketServer;
   private readonly registry: ConnectionRegistry<WebSocket>;
   private readonly router: RedisRouter;
-  private readonly resolveUserId: CreateNotiflyOptions['resolveUserId'];
+  private readonly resolveUserId: CreateNetiflyOptions['resolveUserId'];
   private readonly path: string;
   private readonly heartbeatTimer: NodeJS.Timeout;
   private closed = false;
 
-  constructor(options: CreateNotiflyOptions) {
+  constructor(options: CreateNetiflyOptions) {
     super();
     this.resolveUserId = options.resolveUserId;
     this.path = options.path ?? DEFAULT_PATH;
@@ -1150,7 +1150,7 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
 
   async send(userId: UserId, payload: unknown): Promise<void> {
     if (this.closed) {
-      throw new Error('Notifly: cannot send after close()');
+      throw new Error('Netifly: cannot send after close()');
     }
     await this.router.publish(userId, payload);
   }
@@ -1172,42 +1172,42 @@ class NotiflyServerImpl extends EventEmitter implements NotiflyInstance {
   }
 }
 
-export function createNotifly(options: CreateNotiflyOptions): NotiflyInstance {
-  return new NotiflyServerImpl(options);
+export function createNetifly(options: CreateNetiflyOptions): NetiflyInstance {
+  return new NetiflyServerImpl(options);
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core test`
 Expected: PASS (8 tests). Requires local Redis on `127.0.0.1:6379`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/core/src/types.ts packages/core/src/notiflyServer.ts packages/core/src/notiflyServer.test.ts
-git commit -m "feat(core): add createNotifly integrating WS, Redis routing, and heartbeat"
+git add packages/core/src/types.ts packages/core/src/netiflyServer.ts packages/core/src/netiflyServer.test.ts
+git commit -m "feat(core): add createNetifly integrating WS, Redis routing, and heartbeat"
 ```
 
 ---
 
-## Task 6: `@notifly/core` Public Exports + Build
+## Task 6: `@netifly/core` Public Exports + Build
 
 **Files:**
 - Create: `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `createNotifly` and types from Task 5.
-- Produces: the package's public entry point (`dist/index.js` + `dist/index.d.ts` after build) — this is what `@notifly/express` and end users import as `@notifly/core`.
+- Consumes: `createNetifly` and types from Task 5.
+- Produces: the package's public entry point (`dist/index.js` + `dist/index.d.ts` after build) — this is what `@netifly/express` and end users import as `@netifly/core`.
 
 - [ ] **Step 1: Create the barrel export**
 
 ```ts
 // packages/core/src/index.ts
-export { createNotifly } from './notiflyServer';
+export { createNetifly } from './netiflyServer';
 export type {
-  CreateNotiflyOptions,
-  NotiflyInstance,
+  CreateNetiflyOptions,
+  NetiflyInstance,
   ResolveUserId,
   UserId,
 } from './types';
@@ -1215,12 +1215,12 @@ export type {
 
 - [ ] **Step 2: Build and verify the output**
 
-Run: `pnpm --filter @notifly/core build && node -e "console.log(typeof require('./packages/core/dist/index.js').createNotifly)"`
+Run: `pnpm --filter @netifly/core build && node -e "console.log(typeof require('./packages/core/dist/index.js').createNetifly)"`
 Expected: prints `function`; `packages/core/dist/index.js` and `packages/core/dist/index.d.ts` both exist.
 
 - [ ] **Step 3: Run the full test + typecheck suite for the package**
 
-Run: `pnpm --filter @notifly/core typecheck && pnpm --filter @notifly/core test`
+Run: `pnpm --filter @netifly/core typecheck && pnpm --filter @netifly/core test`
 Expected: both PASS.
 
 - [ ] **Step 4: Commit**
@@ -1232,7 +1232,7 @@ git commit -m "feat(core): add public entry point"
 
 ---
 
-## Task 7: `@notifly/express` Adapter
+## Task 7: `@netifly/express` Adapter
 
 **Requires:** local Redis on `redis://127.0.0.1:6379`.
 
@@ -1244,16 +1244,16 @@ git commit -m "feat(core): add public entry point"
 - Test: `packages/express/src/index.test.ts`
 
 **Interfaces:**
-- Consumes: `createNotifly`, `CreateNotiflyOptions`, `NotiflyInstance` from `@notifly/core` (Task 6, as a workspace dependency).
-- Produces: `attachNotifly(app: Express, options: AttachNotiflyOptions): { server: http.Server; notifly: NotiflyInstance }` from `./index`.
+- Consumes: `createNetifly`, `CreateNetiflyOptions`, `NetiflyInstance` from `@netifly/core` (Task 6, as a workspace dependency).
+- Produces: `attachNetifly(app: Express, options: AttachNetiflyOptions): { server: http.Server; netifly: NetiflyInstance }` from `./index`.
 
 - [ ] **Step 1: Create `packages/express/package.json`**
 
 ```json
 {
-  "name": "@notifly/express",
+  "name": "@netifly/express",
   "version": "0.0.0",
-  "description": "Express adapter for @notifly/core — real-time per-user WebSocket notifications backed by Redis.",
+  "description": "Express adapter for @netifly/core — real-time per-user WebSocket notifications backed by Redis.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -1264,7 +1264,7 @@ git commit -m "feat(core): add public entry point"
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@notifly/core": "workspace:*"
+    "@netifly/core": "workspace:*"
   },
   "peerDependencies": {
     "express": "^4.19.0"
@@ -1313,7 +1313,7 @@ module.exports = {
 
 - [ ] **Step 4: Install and build the workspace dependency**
 
-Run: `pnpm install && pnpm --filter @notifly/core build`
+Run: `pnpm install && pnpm --filter @netifly/core build`
 
 - [ ] **Step 5: Write the failing test**
 
@@ -1323,18 +1323,18 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import WebSocket from 'ws';
-import { attachNotifly } from './index';
+import { attachNetifly } from './index';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
 jest.setTimeout(15000);
 
-describe('attachNotifly', () => {
-  it('creates an http.Server from the Express app and wires notifly to it', async () => {
+describe('attachNetifly', () => {
+  it('creates an http.Server from the Express app and wires netifly to it', async () => {
     const app = express();
     app.get('/health', (_req, res) => res.send('ok'));
 
-    const { server, notifly } = attachNotifly(app, {
+    const { server, netifly } = attachNetifly(app, {
       resolveUserId: () => 'eve',
       redisUrl: REDIS_URL,
     });
@@ -1345,7 +1345,7 @@ describe('attachNotifly', () => {
     const httpResponse = await fetch(`http://127.0.0.1:${port}/health`);
     expect(await httpResponse.text()).toBe('ok');
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/notifly`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`);
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve());
       ws.once('error', reject);
@@ -1355,11 +1355,11 @@ describe('attachNotifly', () => {
     const messagePromise = new Promise<string>((resolve) => {
       ws.once('message', (data) => resolve(data.toString()));
     });
-    await notifly.send('eve', { hello: 'express' });
+    await netifly.send('eve', { hello: 'express' });
     await expect(messagePromise).resolves.toBe(JSON.stringify({ hello: 'express' }));
 
     ws.close();
-    await notifly.close();
+    await netifly.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
@@ -1367,21 +1367,21 @@ describe('attachNotifly', () => {
     const app = express();
     const existingServer = http.createServer(app);
 
-    const { server, notifly } = attachNotifly(app, {
+    const { server, netifly } = attachNetifly(app, {
       resolveUserId: () => null,
       redisUrl: REDIS_URL,
       server: existingServer,
     });
 
     expect(server).toBe(existingServer);
-    await notifly.close();
+    await netifly.close();
   });
 });
 ```
 
 - [ ] **Step 6: Run test to verify it fails**
 
-Run: `pnpm --filter @notifly/express test`
+Run: `pnpm --filter @netifly/express test`
 Expected: FAIL — `Cannot find module './index'`
 
 - [ ] **Step 7: Write minimal implementation**
@@ -1390,51 +1390,51 @@ Expected: FAIL — `Cannot find module './index'`
 // packages/express/src/index.ts
 import http from 'node:http';
 import type { Express } from 'express';
-import { createNotifly } from '@notifly/core';
-import type { CreateNotiflyOptions, NotiflyInstance } from '@notifly/core';
+import { createNetifly } from '@netifly/core';
+import type { CreateNetiflyOptions, NetiflyInstance } from '@netifly/core';
 
-export interface AttachNotiflyOptions extends Omit<CreateNotiflyOptions, 'server'> {
+export interface AttachNetiflyOptions extends Omit<CreateNetiflyOptions, 'server'> {
   server?: http.Server;
 }
 
-export interface AttachNotiflyResult {
+export interface AttachNetiflyResult {
   server: http.Server;
-  notifly: NotiflyInstance;
+  netifly: NetiflyInstance;
 }
 
-export function attachNotifly(app: Express, options: AttachNotiflyOptions): AttachNotiflyResult {
+export function attachNetifly(app: Express, options: AttachNetiflyOptions): AttachNetiflyResult {
   const server = options.server ?? http.createServer(app);
-  const notifly = createNotifly({ ...options, server });
-  return { server, notifly };
+  const netifly = createNetifly({ ...options, server });
+  return { server, netifly };
 }
 ```
 
 - [ ] **Step 8: Run test to verify it passes**
 
-Run: `pnpm --filter @notifly/express test`
+Run: `pnpm --filter @netifly/express test`
 Expected: PASS (2 tests). Requires local Redis on `127.0.0.1:6379`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
 git add packages/express/package.json packages/express/tsconfig.json packages/express/jest.config.js packages/express/src/index.ts packages/express/src/index.test.ts pnpm-lock.yaml
-git commit -m "feat(express): add attachNotifly adapter"
+git commit -m "feat(express): add attachNetifly adapter"
 ```
 
 ---
 
-## Task 8: `@notifly/express` Build Verification
+## Task 8: `@netifly/express` Build Verification
 
 **Files:**
 - Modify: none (verification-only task)
 
 **Interfaces:**
-- Consumes: `attachNotifly` from Task 7.
-- Produces: `dist/index.js` + `dist/index.d.ts` for `@notifly/express`.
+- Consumes: `attachNetifly` from Task 7.
+- Produces: `dist/index.js` + `dist/index.d.ts` for `@netifly/express`.
 
 - [ ] **Step 1: Build and verify the output**
 
-Run: `pnpm --filter @notifly/express build && node -e "console.log(typeof require('./packages/express/dist/index.js').attachNotifly)"`
+Run: `pnpm --filter @netifly/express build && node -e "console.log(typeof require('./packages/express/dist/index.js').attachNetifly)"`
 Expected: prints `function`; `packages/express/dist/index.js` and `packages/express/dist/index.d.ts` both exist.
 
 - [ ] **Step 2: Run the full workspace test + typecheck + build**
@@ -1446,7 +1446,7 @@ Expected: all PASS across both packages.
 
 ```bash
 git add -A
-git commit -m "chore: verify @notifly/express build output" --allow-empty
+git commit -m "chore: verify @netifly/express build output" --allow-empty
 ```
 
 ---
@@ -1532,14 +1532,14 @@ git commit -m "ci: add lint/typecheck/test/build workflow with a Redis service c
 - Modify: `package.json` (add semantic-release tooling as root devDependencies)
 
 **Interfaces:**
-- Consumes: the build/test pipeline from Task 9; publishes `@notifly/core` and `@notifly/express` (Tasks 6 and 8) to npm.
+- Consumes: the build/test pipeline from Task 9; publishes `@netifly/core` and `@netifly/express` (Tasks 6 and 8) to npm.
 - Produces: independent semantic-versioned releases per package, triggered on push to `main`, gated by `NPM_TOKEN` and `GITHUB_TOKEN` repo secrets the maintainer creates.
 
 - [ ] **Step 1: Add semantic-release tooling to root `package.json`**
 
 ```json
 {
-  "name": "notifly",
+  "name": "netifly",
   "private": true,
   "license": "MIT",
   "packageManager": "pnpm@9.7.0",
@@ -1587,7 +1587,7 @@ Run: `pnpm install`
       "@semantic-release/git",
       {
         "assets": ["package.json", "CHANGELOG.md"],
-        "message": "chore(release): @notifly/core ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+        "message": "chore(release): @netifly/core ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ],
     "@semantic-release/github"
@@ -1610,7 +1610,7 @@ Run: `pnpm install`
       "@semantic-release/git",
       {
         "assets": ["package.json", "CHANGELOG.md"],
-        "message": "chore(release): @notifly/express ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+        "message": "chore(release): @netifly/express ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ],
     "@semantic-release/github"
@@ -1660,14 +1660,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
 
-      - name: Release @notifly/core
+      - name: Release @netifly/core
         working-directory: packages/core
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Release @notifly/express
+      - name: Release @netifly/express
         working-directory: packages/express
         run: npx semantic-release
         env:
@@ -1678,7 +1678,7 @@ jobs:
 - [ ] **Step 6: Verify config syntax locally**
 
 Run: `node -e "JSON.parse(require('fs').readFileSync('packages/core/.releaserc.json','utf8')); JSON.parse(require('fs').readFileSync('packages/express/.releaserc.json','utf8')); console.log('valid json')"`
-Expected: prints `valid json`. (Actually running `semantic-release` requires a real `NPM_TOKEN`/`GITHUB_TOKEN` and repo history, so the real validation happens on the first push to `main` once you've created those two repo secrets and the `@notifly` npm org — see the README's publishing section.)
+Expected: prints `valid json`. (Actually running `semantic-release` requires a real `NPM_TOKEN`/`GITHUB_TOKEN` and repo history, so the real validation happens on the first push to `main` once you've created those two repo secrets and the `@netifly` npm org — see the README's publishing section.)
 
 - [ ] **Step 7: Commit**
 
@@ -1701,30 +1701,30 @@ git commit -m "ci: add per-package semantic-release automation"
 - [ ] **Step 1: Create `README.md`**
 
 ```markdown
-# 🔔 Notifly
+# 🔔 Netifly
 
 Framework-agnostic, real-time per-user notifications for Node.js servers — WebSockets in, Redis pub/sub for horizontal scaling.
 
-[![npm version](https://img.shields.io/npm/v/@notifly/core.svg)](https://www.npmjs.com/package/@notifly/core)
-[![CI](https://github.com/dolufemi/notifly/actions/workflows/ci.yml/badge.svg)](https://github.com/dolufemi/notifly/actions/workflows/ci.yml)
-[![license](https://img.shields.io/npm/l/@notifly/core.svg)](./LICENSE)
-[![npm downloads](https://img.shields.io/npm/dm/@notifly/core.svg)](https://www.npmjs.com/package/@notifly/core)
+[![npm version](https://img.shields.io/npm/v/@netifly/core.svg)](https://www.npmjs.com/package/@netifly/core)
+[![CI](https://github.com/dolufemi/netifly/actions/workflows/ci.yml/badge.svg)](https://github.com/dolufemi/netifly/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@netifly/core.svg)](./LICENSE)
+[![npm downloads](https://img.shields.io/npm/dm/@netifly/core.svg)](https://www.npmjs.com/package/@netifly/core)
 
 ## ✨ Features
 
 - 🔌 **Framework-agnostic core** — attaches to any Node `http.Server`, so it works under Express, Fastify, Koa, NestJS, or raw `http`.
-- ⚡ **Express adapter** (`@notifly/express`) for a one-line setup.
+- ⚡ **Express adapter** (`@netifly/express`) for a one-line setup.
 - 🔁 **Horizontally scalable** — any number of server instances stay in sync through Redis pub/sub, no sticky sessions required.
-- 🔐 **Auth-agnostic** — you supply a `resolveUserId` function; Notifly doesn't care how you authenticate.
+- 🔐 **Auth-agnostic** — you supply a `resolveUserId` function; Netifly doesn't care how you authenticate.
 - 💓 **Dead-connection reaping** — a ping/pong heartbeat terminates clients that silently disappeared.
 - 🧩 **Zero opinions on payload shape** — send whatever JSON-serializable data your app needs.
 
 ## 📦 Installation
 
 ```bash
-npm install @notifly/core
+npm install @netifly/core
 # or, for Express apps:
-npm install @notifly/core @notifly/express
+npm install @netifly/core @netifly/express
 ```
 
 ## 🚀 Quickstart
@@ -1733,11 +1733,11 @@ npm install @notifly/core @notifly/express
 
 ```ts
 import http from 'node:http';
-import { createNotifly } from '@notifly/core';
+import { createNetifly } from '@netifly/core';
 
 const server = http.createServer((req, res) => res.end('ok'));
 
-const notifly = createNotifly({
+const netifly = createNetifly({
   server,
   resolveUserId: async (req) => verifyJwtFromRequest(req), // your own auth
 });
@@ -1745,24 +1745,24 @@ const notifly = createNotifly({
 server.listen(3000);
 
 // Anywhere in your app:
-notifly.send(userId, { type: 'comment.created', payload: { commentId: 42 } });
+netifly.send(userId, { type: 'comment.created', payload: { commentId: 42 } });
 ```
 
 ### Express
 
 ```ts
 import express from 'express';
-import { attachNotifly } from '@notifly/express';
+import { attachNetifly } from '@netifly/express';
 
 const app = express();
 
-const { server, notifly } = attachNotifly(app, {
+const { server, netifly } = attachNetifly(app, {
   resolveUserId: async (req) => verifyJwtFromRequest(req),
 });
 
 app.post('/comments', (req, res) => {
   const comment = createComment(req.body);
-  notifly.send(comment.authorId, { type: 'comment.created', payload: comment });
+  netifly.send(comment.authorId, { type: 'comment.created', payload: comment });
   res.status(201).json(comment);
 });
 
@@ -1773,7 +1773,7 @@ server.listen(3000);
 
 ## 🔐 Redis Configuration
 
-Notifly reads a single `REDIS_URL` environment variable — never hardcode credentials:
+Netifly reads a single `REDIS_URL` environment variable — never hardcode credentials:
 
 ```bash
 REDIS_URL=redis://:password@host:6379/0
@@ -1781,29 +1781,29 @@ REDIS_URL=redis://:password@host:6379/0
 REDIS_URL=rediss://user:password@host:6380/0
 ```
 
-You can also pass `redisUrl` explicitly to `createNotifly()`/`attachNotifly()`, which takes priority over the env var.
+You can also pass `redisUrl` explicitly to `createNetifly()`/`attachNetifly()`, which takes priority over the env var.
 
 ## 📖 API Reference
 
-### `createNotifly(options)` — `@notifly/core`
+### `createNetifly(options)` — `@netifly/core`
 
 | Option | Type | Required | Description |
 | --- | --- | --- | --- |
 | `server` | `http.Server` | ✅ | The server to attach the WebSocket upgrade handler to. |
 | `resolveUserId` | `(req) => string \| null \| undefined \| Promise<...>` | ✅ | Identifies the connecting user. Returning a falsy value rejects the connection. |
 | `redisUrl` | `string` | — | Defaults to `process.env.REDIS_URL`. |
-| `path` | `string` | — | WebSocket upgrade path. Defaults to `/notifly`. |
+| `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
 
-Returns a `NotiflyInstance`:
+Returns a `NetiflyInstance`:
 
 - `send(userId, payload): Promise<void>` — delivers `payload` to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
 - `disconnect(userId): void` — force-closes all of a user's local connections (e.g. on logout).
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
-### `attachNotifly(app, options)` — `@notifly/express`
+### `attachNetifly(app, options)` — `@netifly/express`
 
-Same `options` as `createNotifly`, minus `server` (optional — pass your own, or let it create one from the Express app). Returns `{ server, notifly }`.
+Same `options` as `createNetifly`, minus `server` (optional — pass your own, or let it create one from the Express app). Returns `{ server, netifly }`.
 
 ## 🏗️ Architecture
 
@@ -1813,7 +1813,7 @@ Client B ──WS──► Server Instance 2 ──┼──► Redis (pub/sub, 
 Client C ──WS──► Server Instance 3 ──┘
 ```
 
-Each instance subscribes to a user's Redis channel (`notifly:user:<id>`) only while it holds a live connection for that user, and unsubscribes the moment that user disconnects locally — so `send()` traffic only reaches the instance(s) that actually need it.
+Each instance subscribes to a user's Redis channel (`netifly:user:<id>`) only while it holds a live connection for that user, and unsubscribes the moment that user disconnects locally — so `send()` traffic only reaches the instance(s) that actually need it.
 
 ## 🧪 Testing & Development
 
@@ -1837,7 +1837,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`fe
 
 - [ ] **Step 2: Sanity-check the badges point at the right package/repo names**
 
-Confirm `@notifly/core` and `dolufemi/notifly` match the actual npm scope and GitHub repo you create.
+Confirm `@netifly/core` and `dolufemi/netifly` match the actual npm scope and GitHub repo you create.
 
 - [ ] **Step 3: Commit**
 
@@ -1852,7 +1852,7 @@ git commit -m "docs: add GitHub-friendly README with badges and quickstart"
 
 These are one-time account/infra steps outside this codebase, per the earlier design decision that you'll handle npm/GitHub account setup yourself:
 
-1. Create a GitHub repo (e.g. `dolufemi/notifly`) and push this branch to it.
-2. Create the `@notifly` npm organization/scope on npmjs.com.
-3. Generate an npm **automation token** with publish rights to `@notifly`, and add it to the GitHub repo as a secret named `NPM_TOKEN`.
+1. Create a GitHub repo (e.g. `dolufemi/netifly`) and push this branch to it.
+2. Create the `@netifly` npm organization/scope on npmjs.com.
+3. Generate an npm **automation token** with publish rights to `@netifly`, and add it to the GitHub repo as a secret named `NPM_TOKEN`.
 4. Confirm Actions has permission to create releases (Settings → Actions → General → Workflow permissions → "Read and write permissions") so `@semantic-release/github` and `@semantic-release/git` can push tags/changelog commits using the built-in `GITHUB_TOKEN`.

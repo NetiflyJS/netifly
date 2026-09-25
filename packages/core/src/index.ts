@@ -1,7 +1,7 @@
-export { createNotifly } from './notiflyServer';
+export { createNetifly } from './netiflyServer';
 export type {
-  CreateNotiflyOptions,
-  NotiflyInstance,
+  CreateNetiflyOptions,
+  NetiflyInstance,
   ResolveUserId,
   UserId,
 } from './types';

@@ -1,15 +1,15 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
-import { createNotifly } from './notiflyServer';
-import type { NotiflyInstance } from './types';
+import { createNetifly } from './netiflyServer';
+import type { NetiflyInstance } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
 jest.setTimeout(15000);
 
 interface TestServer {
-  notifly: NotiflyInstance;
+  netifly: NetiflyInstance;
   port: number;
   close: () => Promise<void>;
 }
@@ -18,7 +18,7 @@ async function startTestServer(
   resolveUserId: (req: http.IncomingMessage) => unknown
 ): Promise<TestServer> {
   const httpServer = http.createServer((_req, res) => res.end());
-  const notifly = createNotifly({
+  const netifly = createNetifly({
     server: httpServer,
     resolveUserId: resolveUserId as never,
     redisUrl: REDIS_URL,
@@ -28,10 +28,10 @@ async function startTestServer(
   const port = (httpServer.address() as AddressInfo).port;
 
   return {
-    notifly,
+    netifly,
     port,
     close: async () => {
-      await notifly.close();
+      await netifly.close();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
   };
@@ -39,7 +39,7 @@ async function startTestServer(
 
 function connectClient(port: number): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/notifly`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
@@ -55,15 +55,15 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// createNotifly's returned instance emits 'connect' exactly when
+// createNetifly's returned instance emits 'connect' exactly when
 // registry.add runs — right after the SUBSCRIBE await completes — so
 // awaiting this event is a deterministic replacement for a fixed sleep when
 // a test needs to know the initial Redis SUBSCRIBE has been acknowledged.
-function onceEvent(emitter: NotiflyInstance, event: 'connect'): Promise<void> {
+function onceEvent(emitter: NetiflyInstance, event: 'connect'): Promise<void> {
   return new Promise((resolve) => emitter.once(event, () => resolve()));
 }
 
-describe('createNotifly', () => {
+describe('createNetifly', () => {
   const servers: TestServer[] = [];
   const clients: WebSocket[] = [];
 
@@ -98,87 +98,87 @@ describe('createNotifly', () => {
   });
 
   it('delivers a send() to a connection on the same instance', async () => {
-    const server = await startTestServer(() => 'notiflyServer-alice');
+    const server = await startTestServer(() => 'netiflyServer-alice');
     servers.push(server);
 
-    const connectedPromise = onceEvent(server.notifly, 'connect');
+    const connectedPromise = onceEvent(server.netifly, 'connect');
     const client = await connectClient(server.port);
     clients.push(client);
     await connectedPromise;
 
     const messagePromise = nextMessage(client);
-    await server.notifly.send('notiflyServer-alice', { type: 'greeting', text: 'hi' });
+    await server.netifly.send('netiflyServer-alice', { type: 'greeting', text: 'hi' });
 
     await expect(messagePromise).resolves.toBe(JSON.stringify({ type: 'greeting', text: 'hi' }));
   });
 
   it('delivers a send() across two server instances via Redis', async () => {
-    const serverA = await startTestServer(() => 'notiflyServer-bob');
-    const serverB = await startTestServer(() => 'notiflyServer-bob');
+    const serverA = await startTestServer(() => 'netiflyServer-bob');
+    const serverB = await startTestServer(() => 'netiflyServer-bob');
     servers.push(serverA, serverB);
 
-    const connectedPromise = onceEvent(serverB.notifly, 'connect');
+    const connectedPromise = onceEvent(serverB.netifly, 'connect');
     const client = await connectClient(serverB.port);
     clients.push(client);
     await connectedPromise;
 
     const messagePromise = nextMessage(client);
-    await serverA.notifly.send('notiflyServer-bob', { type: 'cross-instance' });
+    await serverA.netifly.send('netiflyServer-bob', { type: 'cross-instance' });
 
     await expect(messagePromise).resolves.toBe(JSON.stringify({ type: 'cross-instance' }));
   });
 
   it('delivers a send() to every connection a user has open', async () => {
-    const server = await startTestServer(() => 'notiflyServer-frank');
+    const server = await startTestServer(() => 'netiflyServer-frank');
     servers.push(server);
 
-    const firstConnectedPromise = onceEvent(server.notifly, 'connect');
+    const firstConnectedPromise = onceEvent(server.netifly, 'connect');
     const clientA = await connectClient(server.port);
     clients.push(clientA);
     await firstConnectedPromise;
 
-    const secondConnectedPromise = onceEvent(server.notifly, 'connect');
+    const secondConnectedPromise = onceEvent(server.netifly, 'connect');
     const clientB = await connectClient(server.port);
     clients.push(clientB);
     await secondConnectedPromise;
 
     const messageA = nextMessage(clientA);
     const messageB = nextMessage(clientB);
-    await server.notifly.send('notiflyServer-frank', { type: 'multi-tab' });
+    await server.netifly.send('netiflyServer-frank', { type: 'multi-tab' });
 
     await expect(messageA).resolves.toBe(JSON.stringify({ type: 'multi-tab' }));
     await expect(messageB).resolves.toBe(JSON.stringify({ type: 'multi-tab' }));
   });
 
   it('is a no-op when sending to a user with no connections anywhere', async () => {
-    const server = await startTestServer(() => 'notiflyServer-carol');
+    const server = await startTestServer(() => 'netiflyServer-carol');
     servers.push(server);
 
     await expect(
-      server.notifly.send('notiflyServer-nobody-online', { type: 'x' })
+      server.netifly.send('netiflyServer-nobody-online', { type: 'x' })
     ).resolves.toBeUndefined();
   });
 
   it("disconnect() closes all of a user's local connections", async () => {
-    const server = await startTestServer(() => 'notiflyServer-dave');
+    const server = await startTestServer(() => 'netiflyServer-dave');
     servers.push(server);
 
-    const connectedPromise = onceEvent(server.notifly, 'connect');
+    const connectedPromise = onceEvent(server.netifly, 'connect');
     const client = await connectClient(server.port);
     clients.push(client);
     await connectedPromise;
 
     const closePromise = new Promise<void>((resolve) => client.once('close', () => resolve()));
-    server.notifly.disconnect('notiflyServer-dave');
+    server.netifly.disconnect('netiflyServer-dave');
 
     await closePromise;
   });
 
   it('close() resolves even while a client is still connected', async () => {
-    const server = await startTestServer(() => 'notiflyServer-henry');
+    const server = await startTestServer(() => 'netiflyServer-henry');
     servers.push(server);
 
-    const connectedPromise = onceEvent(server.notifly, 'connect');
+    const connectedPromise = onceEvent(server.netifly, 'connect');
     const client = await connectClient(server.port);
     clients.push(client);
     await connectedPromise;
@@ -200,12 +200,12 @@ describe('createNotifly', () => {
   });
 
   it('rejects send() after close()', async () => {
-    const server = await startTestServer(() => 'notiflyServer-gina');
+    const server = await startTestServer(() => 'netiflyServer-gina');
     servers.push(server);
 
-    await server.notifly.close();
-    await expect(server.notifly.send('notiflyServer-gina', { type: 'x' })).rejects.toThrow(
-      'Notifly: cannot send after close()'
+    await server.netifly.close();
+    await expect(server.netifly.send('netiflyServer-gina', { type: 'x' })).rejects.toThrow(
+      'Netifly: cannot send after close()'
     );
 
     servers.pop(); // already closed above; skip afterEach double-close
