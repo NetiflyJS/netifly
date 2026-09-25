@@ -78,7 +78,7 @@ importers:
 
   packages/express:
     dependencies:
-      '@notiflyjs/core':
+      '@netiflyjs/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:

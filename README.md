@@ -9,15 +9,15 @@
 
 Framework-agnostic, real-time per-user notifications for Node.js servers — WebSockets in, Redis pub/sub for horizontal scaling.
 
-[![npm version](https://img.shields.io/npm/v/@notiflyjs/core.svg)](https://www.npmjs.com/package/@notiflyjs/core)
-[![CI](https://github.com/NotiflyJS/notifly/actions/workflows/ci.yml/badge.svg)](https://github.com/NotiflyJS/notifly/actions/workflows/ci.yml)
-[![license](https://img.shields.io/npm/l/@notiflyjs/core.svg)](./LICENSE)
-[![npm downloads](https://img.shields.io/npm/dm/@notiflyjs/core.svg)](https://www.npmjs.com/package/@notiflyjs/core)
+[![npm version](https://img.shields.io/npm/v/@netiflyjs/core.svg)](https://www.npmjs.com/package/@netiflyjs/core)
+[![CI](https://github.com/NetiflyJS/netifly/actions/workflows/ci.yml/badge.svg)](https://github.com/NetiflyJS/netifly/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@netiflyjs/core.svg)](./LICENSE)
+[![npm downloads](https://img.shields.io/npm/dm/@netiflyjs/core.svg)](https://www.npmjs.com/package/@netiflyjs/core)
 
 ## ✨ Features
 
 - 🔌 **Framework-agnostic core** — attaches to any Node `http.Server`, so it works under Express, Fastify, Koa, NestJS, or raw `http`.
-- ⚡ **Express adapter** (`@notiflyjs/express`) for a one-line setup.
+- ⚡ **Express adapter** (`@netiflyjs/express`) for a one-line setup.
 - 🔁 **Horizontally scalable** — any number of server instances stay in sync through Redis pub/sub, no sticky sessions required.
 - 🔐 **Auth-agnostic** — you supply a `resolveUserId` function; Notifly doesn't care how you authenticate.
 - 💓 **Dead-connection reaping** — a ping/pong heartbeat terminates clients that silently disappeared.
@@ -26,9 +26,9 @@ Framework-agnostic, real-time per-user notifications for Node.js servers — Web
 ## 📦 Installation
 
 ```bash
-npm install @notiflyjs/core
+npm install @netiflyjs/core
 # or, for Express apps:
-npm install @notiflyjs/core @notiflyjs/express
+npm install @netiflyjs/core @netiflyjs/express
 ```
 
 ## 🚀 Quickstart
@@ -37,7 +37,7 @@ npm install @notiflyjs/core @notiflyjs/express
 
 ```ts
 import http from 'node:http';
-import { createNotifly } from '@notiflyjs/core';
+import { createNotifly } from '@netiflyjs/core';
 
 const server = http.createServer((req, res) => res.end('ok'));
 
@@ -56,7 +56,7 @@ notifly.send(userId, { type: 'comment.created', payload: { commentId: 42 } });
 
 ```ts
 import express from 'express';
-import { attachNotifly } from '@notiflyjs/express';
+import { attachNotifly } from '@netiflyjs/express';
 
 const app = express();
 
@@ -98,7 +98,7 @@ or explicitly via the `redisUrl` option to `createNotifly()`/`attachNotifly()`, 
 
 ## 📖 API Reference
 
-### `createNotifly(options)` — `@notiflyjs/core`
+### `createNotifly(options)` — `@netiflyjs/core`
 
 | Option | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -114,7 +114,7 @@ Returns a `NotiflyInstance`:
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`. **Attaching an `'error'` listener is effectively required for production use** — Notifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
-### `attachNotifly(app, options)` — `@notiflyjs/express`
+### `attachNotifly(app, options)` — `@netiflyjs/express`
 
 Same `options` as `createNotifly`, minus `server` (optional — pass your own, or let it create one from the Express app). Returns `{ server, notifly }`.
 

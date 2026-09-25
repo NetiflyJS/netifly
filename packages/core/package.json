@@ -1,5 +1,5 @@
 {
-  "name": "@notiflyjs/core",
+  "name": "@netiflyjs/core",
   "version": "1.0.1",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and Redis.",
   "license": "MIT",

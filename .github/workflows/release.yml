@@ -44,7 +44,7 @@ jobs:
             cp LICENSE "packages/$pkg/LICENSE"
           done
 
-      - name: Release @notiflyjs/core
+      - name: Release @netiflyjs/core
         working-directory: packages/core
         run: npx semantic-release
         env:
@@ -54,7 +54,7 @@ jobs:
       - name: Sync local branch after core release
         run: git pull --ff-only
 
-      - name: Release @notiflyjs/express
+      - name: Release @netiflyjs/express
         working-directory: packages/express
         run: npx semantic-release
         env:
