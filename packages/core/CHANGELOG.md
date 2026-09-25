@@ -1,3 +1,10 @@
+# [@netiflyjs/core-v1.3.1](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.3.0...@netiflyjs/core-v1.3.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **core:** ref-count Redis subscriptions to close subscribe/unsubscribe race ([23a860f](https://github.com/NetiflyJS/netifly/commit/23a860f83f3025ca82b9c974dac635f887b4e882))
+
 # [@netiflyjs/core-v1.3.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.2.0...@netiflyjs/core-v1.3.0) (2026-09-25)
 
 
