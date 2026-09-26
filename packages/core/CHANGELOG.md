@@ -1,3 +1,10 @@
+# [@netiflyjs/core-v1.7.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.6.0...@netiflyjs/core-v1.7.0) (2026-09-26)
+
+
+### Features
+
+* **core:** add namespace option to isolate shared Redis instances ([c22784a](https://github.com/NetiflyJS/netifly/commit/c22784a9ec80e496a7d250ee4aeb0c8a1ba92cfe))
+
 # [@netiflyjs/core-v1.6.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.5.0...@netiflyjs/core-v1.6.0) (2026-09-26)
 
 
