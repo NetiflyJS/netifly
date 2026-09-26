@@ -98,6 +98,42 @@ export class RedisRouter {
     return this.publisher.publish(channelName(userId), serialized);
   }
 
+  // Presence (NOT-14): every online user has a subscribed Redis channel, so
+  // PUBSUB NUMSUB on that channel gives cluster-wide presence with no extra
+  // state. Run on the publisher, not the subscriber — the subscriber
+  // connection may be in RESP2 subscribe-mode depending on active
+  // subscriptions, while the publisher is always a plain client safe for
+  // arbitrary commands.
+  async numSubscribers(userId: UserId): Promise<number> {
+    const [, count] = (await this.publisher.call('PUBSUB', 'NUMSUB', channelName(userId))) as [
+      string,
+      number,
+    ];
+    return count;
+  }
+
+  // One NUMSUB call for many channels, per the ticket, rather than looping
+  // numSubscribers() per userId. Redis replies with a flat
+  // [channel1, count1, channel2, count2, ...] array in the same order the
+  // channels were requested, so the reply is zipped back to the original
+  // userIds by index rather than parsed back out of the channel names —
+  // simpler, and doesn't couple this to channelName's exact prefix format.
+  async numSubscribersMany(userIds: UserId[]): Promise<Record<UserId, number>> {
+    if (userIds.length === 0) return {};
+
+    const channels = userIds.map(channelName);
+    const reply = (await this.publisher.call('PUBSUB', 'NUMSUB', ...channels)) as (
+      | string
+      | number
+    )[];
+
+    const counts: Record<UserId, number> = {};
+    userIds.forEach((userId, index) => {
+      counts[userId] = reply[index * 2 + 1] as number;
+    });
+    return counts;
+  }
+
   async close(): Promise<void> {
     this.publisher.disconnect();
     this.subscriber.disconnect();

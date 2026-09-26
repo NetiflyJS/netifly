@@ -119,4 +119,25 @@ export interface NetiflyInstance {
   once(event: 'reject', listener: (info: RejectInfo) => void): this;
   once(event: 'dropped', listener: (info: DroppedInfo) => void): this;
   close(): Promise<void>;
+  /**
+   * Whether `userId` has a live connection anywhere in the cluster, derived
+   * from Redis `PUBSUB NUMSUB` on that user's channel. Accurate only within
+   * the heartbeat interval: an unclean disconnect (network drop, laptop lid
+   * closed) leaves the channel subscribed until the ping/pong heartbeat
+   * notices and terminates the dead socket, so this can report `true` for up
+   * to roughly one heartbeat interval after a connection has actually died.
+   */
+  isOnline(userId: UserId): Promise<boolean>;
+  /**
+   * Same as `isOnline`, batched: one `PUBSUB NUMSUB` call for every `userId`
+   * instead of one round-trip each. Same heartbeat-interval accuracy caveat
+   * applies. Resolves `{}` for an empty array without a Redis round-trip.
+   */
+  whoIsOnline(userIds: UserId[]): Promise<Record<UserId, boolean>>;
+  /**
+   * Local-only fast path: whether `userId` has a live connection on *this*
+   * instance specifically, with no Redis round-trip. Synchronous, unlike
+   * `isOnline`/`whoIsOnline`, which check presence across the whole cluster.
+   */
+  isConnectedHere(userId: UserId): boolean;
 }
