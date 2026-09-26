@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { RedisRouter, channelName } from './redisRouter';
+import { RedisRouter, RedisRouterOptions, channelName } from './redisRouter';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -19,6 +19,22 @@ describe('channelName', () => {
   it('formats the per-user channel name', () => {
     expect(channelName('alice')).toBe('netifly:user:alice');
   });
+
+  it('formats a namespaced per-user channel name (NOT-18)', () => {
+    expect(channelName('alice', 'tenant-a')).toBe('netifly:tenant-a:user:alice');
+  });
+
+  it('throws for an empty userId (NOT-18)', () => {
+    expect(() => channelName('')).toThrow(
+      'Netifly: userId must be a non-empty string of at most 256 characters'
+    );
+  });
+
+  it('throws for a userId over the max length (NOT-18)', () => {
+    expect(() => channelName('a'.repeat(257))).toThrow(
+      'Netifly: userId must be a non-empty string of at most 256 characters'
+    );
+  });
 });
 
 describe('RedisRouter', () => {
@@ -32,8 +48,11 @@ describe('RedisRouter', () => {
     await Promise.all(routers.map((router) => router.close()));
   });
 
-  function createRouter(onMessage: (userId: string, rawMessage: string) => void): RedisRouter {
-    const router = new RedisRouter({ redisUrl: REDIS_URL, onMessage });
+  function createRouter(
+    onMessage: (userId: string, rawMessage: string) => void,
+    options: Partial<Omit<RedisRouterOptions, 'redisUrl' | 'onMessage'>> = {}
+  ): RedisRouter {
+    const router = new RedisRouter({ redisUrl: REDIS_URL, onMessage, ...options });
     routers.push(router);
     return router;
   }
@@ -131,6 +150,47 @@ describe('RedisRouter', () => {
     await expect(publisherRouter.publish('redisRouter-zoe', circular)).rejects.toThrow(
       'Netifly: payload for user "redisRouter-zoe" is not JSON-serializable'
     );
+  });
+
+  // NOT-18: two apps (or staging/prod) sharing one Redis instance must not
+  // receive each other's notifications just because they happen to pick the
+  // same userId. namespace scopes the channel name per-tenant.
+  it('isolates two namespaces sharing the same Redis and userId (NOT-18)', async () => {
+    const onMessageA = jest.fn();
+    const onMessageB = jest.fn();
+    const subscriberA = createRouter(onMessageA, { namespace: 'tenant-a' });
+    const subscriberB = createRouter(onMessageB, { namespace: 'tenant-b' });
+    const publisherA = createRouter(() => {}, { namespace: 'tenant-a' });
+
+    await subscriberA.subscribe('redisRouter-shared-tenant');
+    await subscriberB.subscribe('redisRouter-shared-tenant');
+    await publisherA.publish('redisRouter-shared-tenant', { hello: 'tenant-a only' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(onMessageA).toHaveBeenCalledWith(
+      'redisRouter-shared-tenant',
+      JSON.stringify({ hello: 'tenant-a only' })
+    );
+    expect(onMessageB).not.toHaveBeenCalled();
+  });
+
+  it('isolates a namespaced router from a default (no-namespace) router for the same userId (NOT-18)', async () => {
+    const onMessageDefault = jest.fn();
+    const onMessageNamespaced = jest.fn();
+    const defaultSubscriber = createRouter(onMessageDefault);
+    const namespacedSubscriber = createRouter(onMessageNamespaced, { namespace: 'tenant-a' });
+    const defaultPublisher = createRouter(() => {});
+
+    await defaultSubscriber.subscribe('redisRouter-shared-default');
+    await namespacedSubscriber.subscribe('redisRouter-shared-default');
+    await defaultPublisher.publish('redisRouter-shared-default', { hello: 'default only' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(onMessageDefault).toHaveBeenCalledWith(
+      'redisRouter-shared-default',
+      JSON.stringify({ hello: 'default only' })
+    );
+    expect(onMessageNamespaced).not.toHaveBeenCalled();
   });
 
   it('surfaces connection errors via onError instead of throwing', async () => {

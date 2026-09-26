@@ -56,6 +56,14 @@ export interface CreateNetiflyOptions {
    * only, so this is not a cluster-wide cap). Defaults to 10.
    */
   maxConnectionsPerUser?: number;
+  /**
+   * Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of
+   * the default `netifly:user:<id>`. Set this when multiple apps (or
+   * environments, e.g. staging vs. prod) share one Redis instance — common
+   * on Upstash/Redis Cloud free tiers — so they don't receive each other's
+   * notifications. Defaults to unset (no namespace).
+   */
+  namespace?: string;
 }
 
 /** Emitted via the `reject` event when an upgrade is rejected. */

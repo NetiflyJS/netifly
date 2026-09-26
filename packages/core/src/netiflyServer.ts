@@ -58,6 +58,7 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
       redisUrl,
       onMessage: (userId, rawMessage) => this.deliverLocally(userId, rawMessage),
       onError: (error) => this.emitError(error),
+      namespace: options.namespace,
     });
 
     this.wss = new WebSocketServer({ noServer: true, maxPayload: this.maxPayload });

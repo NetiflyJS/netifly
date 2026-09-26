@@ -5,21 +5,43 @@ export interface RedisRouterOptions {
   redisUrl: string;
   onMessage: (userId: UserId, rawMessage: string) => void;
   onError?: (error: Error) => void;
+  /**
+   * Scopes this router's channel names to `netifly:<namespace>:user:<id>`
+   * instead of the default `netifly:user:<id>`. Set this when multiple apps
+   * (or environments, e.g. staging vs. prod) share one Redis instance — common
+   * on Upstash/Redis Cloud free tiers — so they don't receive each other's
+   * notifications. Omit for the default, unnamespaced shape.
+   */
+  namespace?: string;
 }
 
-const CHANNEL_PREFIX = 'netifly:user:';
+const CHANNEL_PREFIX = 'netifly:';
+const CHANNEL_USER_SEGMENT = 'user:';
+const MAX_USER_ID_LENGTH = 256;
 
-export function channelName(userId: UserId): string {
-  return `${CHANNEL_PREFIX}${userId}`;
+function assertValidUserId(userId: UserId): void {
+  if (typeof userId !== 'string' || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
+    throw new Error(
+      `Netifly: userId must be a non-empty string of at most ${MAX_USER_ID_LENGTH} characters`
+    );
+  }
 }
 
-function userIdFromChannel(channel: string): UserId | null {
-  return channel.startsWith(CHANNEL_PREFIX) ? channel.slice(CHANNEL_PREFIX.length) : null;
+function channelPrefix(namespace?: string): string {
+  return namespace
+    ? `${CHANNEL_PREFIX}${namespace}:${CHANNEL_USER_SEGMENT}`
+    : `${CHANNEL_PREFIX}${CHANNEL_USER_SEGMENT}`;
+}
+
+export function channelName(userId: UserId, namespace?: string): string {
+  assertValidUserId(userId);
+  return `${channelPrefix(namespace)}${userId}`;
 }
 
 export class RedisRouter {
   private readonly publisher: Redis;
   private readonly subscriber: Redis;
+  private readonly namespace: string | undefined;
   // Multiple callers (e.g. two WebSocket connections for the same user) can
   // subscribe on behalf of the same userId concurrently. Ref-counting here,
   // rather than relying on callers to know whether anyone else still wants
@@ -28,6 +50,7 @@ export class RedisRouter {
   private readonly refCounts = new Map<UserId, number>();
 
   constructor(options: RedisRouterOptions) {
+    this.namespace = options.namespace;
     this.publisher = new Redis(options.redisUrl);
     // enableReadyCheck is disabled here because ioredis's own connection
     // handshake sends an INFO command to verify readiness, and that command
@@ -45,11 +68,20 @@ export class RedisRouter {
     }
 
     this.subscriber.on('message', (channel, rawMessage) => {
-      const userId = userIdFromChannel(channel);
+      const userId = this.userIdFromChannel(channel);
       if (userId !== null) {
         options.onMessage(userId, rawMessage);
       }
     });
+  }
+
+  private userIdFromChannel(channel: string): UserId | null {
+    const prefix = channelPrefix(this.namespace);
+    return channel.startsWith(prefix) ? channel.slice(prefix.length) : null;
+  }
+
+  private channelFor(userId: UserId): string {
+    return channelName(userId, this.namespace);
   }
 
   async subscribe(userId: UserId): Promise<void> {
@@ -58,7 +90,7 @@ export class RedisRouter {
     if (count > 0) return; // someone else already holds this channel open
 
     try {
-      await this.subscriber.subscribe(channelName(userId));
+      await this.subscriber.subscribe(this.channelFor(userId));
     } catch (error) {
       const current = this.refCounts.get(userId) ?? 1;
       if (current <= 1) this.refCounts.delete(userId);
@@ -72,7 +104,7 @@ export class RedisRouter {
     if (count <= 1) {
       this.refCounts.delete(userId);
       if (count === 1) {
-        await this.subscriber.unsubscribe(channelName(userId));
+        await this.subscriber.unsubscribe(this.channelFor(userId));
       }
       return;
     }
@@ -80,6 +112,7 @@ export class RedisRouter {
   }
 
   async publish(userId: UserId, payload: unknown): Promise<void> {
+    const channel = this.channelFor(userId);
     let serialized: string;
     try {
       serialized = JSON.stringify(payload);
@@ -89,7 +122,7 @@ export class RedisRouter {
       (serializationError as Error & { cause?: unknown }).cause = error;
       throw serializationError;
     }
-    await this.publisher.publish(channelName(userId), serialized);
+    await this.publisher.publish(channel, serialized);
   }
 
   async close(): Promise<void> {
