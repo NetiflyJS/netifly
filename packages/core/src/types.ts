@@ -87,9 +87,36 @@ export interface DroppedInfo {
   reason: 'maxBufferedBytes';
 }
 
+/**
+ * Result of a `send()`/`sendOr()` call. `instances` is the number of server
+ * instances that held a live connection for the user at publish time (Redis
+ * PUBLISH's own subscriber count), and `delivered` is just `instances > 0`.
+ *
+ * Caveat: this means the message reached a server process holding a live
+ * socket for that user — not that the user actually saw it rendered on
+ * screen. Delivery acknowledgements/read-receipts are out of scope here and
+ * may be a future addition.
+ */
+export interface SendResult {
+  delivered: boolean;
+  instances: number;
+}
+
+export interface SendOrOptions {
+  /** Called (and awaited, if it returns a promise) when the send was not delivered anywhere. */
+  offline: () => void | Promise<void>;
+}
+
 export interface NetiflyInstance {
-  send<T>(userId: UserId, payload: T): Promise<void>;
-  send<T>(userId: UserId, type: string, data: T): Promise<void>;
+  send<T>(userId: UserId, payload: T): Promise<SendResult>;
+  send<T>(userId: UserId, type: string, data: T): Promise<SendResult>;
+  /**
+   * Like `send()`, but calls (and awaits) `options.offline()` when the
+   * message wasn't delivered to any connection anywhere in the cluster.
+   * Resolves with the same `SendResult` either way.
+   */
+  sendOr<T>(userId: UserId, payload: T, options: SendOrOptions): Promise<SendResult>;
+  sendOr<T>(userId: UserId, type: string, data: T, options: SendOrOptions): Promise<SendResult>;
   disconnect(userId: UserId): void;
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
@@ -100,4 +127,25 @@ export interface NetiflyInstance {
   once(event: 'reject', listener: (info: RejectInfo) => void): this;
   once(event: 'dropped', listener: (info: DroppedInfo) => void): this;
   close(): Promise<void>;
+  /**
+   * Whether `userId` has a live connection anywhere in the cluster, derived
+   * from Redis `PUBSUB NUMSUB` on that user's channel. Accurate only within
+   * the heartbeat interval: an unclean disconnect (network drop, laptop lid
+   * closed) leaves the channel subscribed until the ping/pong heartbeat
+   * notices and terminates the dead socket, so this can report `true` for up
+   * to roughly one heartbeat interval after a connection has actually died.
+   */
+  isOnline(userId: UserId): Promise<boolean>;
+  /**
+   * Same as `isOnline`, batched: one `PUBSUB NUMSUB` call for every `userId`
+   * instead of one round-trip each. Same heartbeat-interval accuracy caveat
+   * applies. Resolves `{}` for an empty array without a Redis round-trip.
+   */
+  whoIsOnline(userIds: UserId[]): Promise<Record<UserId, boolean>>;
+  /**
+   * Local-only fast path: whether `userId` has a live connection on *this*
+   * instance specifically, with no Redis round-trip. Synchronous, unlike
+   * `isOnline`/`whoIsOnline`, which check presence across the whole cluster.
+   */
+  isConnectedHere(userId: UserId): boolean;
 }

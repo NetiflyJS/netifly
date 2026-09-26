@@ -111,7 +111,13 @@ export class RedisRouter {
     this.refCounts.set(userId, count - 1);
   }
 
-  async publish(userId: UserId, payload: unknown): Promise<void> {
+  /**
+   * Returns the number of subscribers that received the message (Redis
+   * PUBLISH's own return value) — for Netifly, this is the number of server
+   * instances currently holding a live connection for `userId`, which lets
+   * callers know at publish time whether the user was reachable (see NOT-13).
+   */
+  async publish(userId: UserId, payload: unknown): Promise<number> {
     const channel = this.channelFor(userId);
     let serialized: string;
     try {
@@ -122,7 +128,46 @@ export class RedisRouter {
       (serializationError as Error & { cause?: unknown }).cause = error;
       throw serializationError;
     }
-    await this.publisher.publish(channel, serialized);
+    return this.publisher.publish(channel, serialized);
+  }
+
+  // Presence (NOT-14): every online user has a subscribed Redis channel, so
+  // PUBSUB NUMSUB on that channel gives cluster-wide presence with no extra
+  // state. Run on the publisher, not the subscriber — the subscriber
+  // connection may be in RESP2 subscribe-mode depending on active
+  // subscriptions, while the publisher is always a plain client safe for
+  // arbitrary commands. Uses channelFor() (not the bare channelName()) so
+  // presence respects `namespace` the same way subscribe/unsubscribe/publish
+  // do — otherwise a namespaced deployment would silently check the wrong
+  // (unnamespaced) channel here.
+  async numSubscribers(userId: UserId): Promise<number> {
+    const [, count] = (await this.publisher.call('PUBSUB', 'NUMSUB', this.channelFor(userId))) as [
+      string,
+      number,
+    ];
+    return count;
+  }
+
+  // One NUMSUB call for many channels, per the ticket, rather than looping
+  // numSubscribers() per userId. Redis replies with a flat
+  // [channel1, count1, channel2, count2, ...] array in the same order the
+  // channels were requested, so the reply is zipped back to the original
+  // userIds by index rather than parsed back out of the channel names —
+  // simpler, and doesn't couple this to channelName's exact prefix format.
+  async numSubscribersMany(userIds: UserId[]): Promise<Record<UserId, number>> {
+    if (userIds.length === 0) return {};
+
+    const channels = userIds.map((userId) => this.channelFor(userId));
+    const reply = (await this.publisher.call('PUBSUB', 'NUMSUB', ...channels)) as (
+      | string
+      | number
+    )[];
+
+    const counts: Record<UserId, number> = {};
+    userIds.forEach((userId, index) => {
+      counts[userId] = reply[index * 2 + 1] as number;
+    });
+    return counts;
   }
 
   async close(): Promise<void> {

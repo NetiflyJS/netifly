@@ -101,6 +101,18 @@ app.post('/comments', (req, res) => {
 
 > 🛡️ Netifly rejects cross-origin upgrades by default (see [Security](#-security) below) — if you need to accept them (e.g. a token-in-query setup, or a non-browser client that omits `Origin`), configure `allowedOrigins`.
 
+### Recipe: email when offline
+
+`send()` tells you at publish time whether a user was reachable over their live WebSocket connection (see [API Reference](#-api-reference) for the `delivered`/`instances` caveat). `sendOr()` is sugar for the common "fall back to email/push when the user isn't online" pattern, so you don't have to branch on `delivered` yourself:
+
+```ts
+await netifly.sendOr(userId, 'invoice.ready', data, {
+  offline: () => sendEmail(userId, 'Your invoice is ready', data),
+});
+```
+
+`offline` is only called — and awaited, if it returns a promise — when nobody held a live connection for `userId` anywhere in your cluster. Either way, `sendOr()` resolves with the same `SendResult` `send()` would have returned.
+
 ## 🔐 Redis Configuration
 
 Netifly requires a Redis connection string — never hardcode credentials. Provide it either as an environment variable:
@@ -206,13 +218,19 @@ Non-Node publishers (e.g. publishing directly to a Netifly Redis channel from an
 
 Returns a `NetiflyInstance`:
 
-- `send<T>(userId, payload: T): Promise<void>` — wraps `payload` as `{ v, id, type: "message", data: payload, ts }` (see [Message Envelope](#message-envelope)) and delivers it to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
-- `send<T>(userId, type: string, data: T): Promise<void>` — same delivery semantics, but wraps as `{ v, id, type, data, ts }` with the `type` you provide instead of the `"message"` default.
+- `send<T>(userId, payload: T): Promise<SendResult>` — wraps `payload` as `{ v, id, type: "message", data: payload, ts }` (see [Message Envelope](#message-envelope)) and delivers it to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
+- `send<T>(userId, type: string, data: T): Promise<SendResult>` — same delivery semantics, but wraps as `{ v, id, type, data, ts }` with the `type` you provide instead of the `"message"` default.
+  - `SendResult` is `{ delivered: boolean; instances: number }`. `instances` is the number of server instances that held a live connection for `userId` at publish time — this comes straight from Redis's own `PUBLISH` return value (the subscriber count), so Netifly can tell you **at publish time** whether the user was reachable, something channel-based systems like Pusher/Ably can't do. `delivered` is just `instances > 0`.
+  - ⚠️ **Caveat**: `delivered: true` means the message reached a server process holding a live socket for that user — it does **not** mean the user's client actually received or rendered it. Delivery acknowledgements / read-receipts are out of scope for this API and may land as a future addition.
+- `sendOr<T>(userId, payload: T, options: { offline: () => void | Promise<void> }): Promise<SendResult>` / `sendOr<T>(userId, type: string, data: T, options): Promise<SendResult>` — sugar over `send()`: calls `send()` with the same arguments, and if the result is `{ delivered: false }`, calls `options.offline()` and awaits it (if it returns a promise) before resolving. Always resolves with the same `SendResult` `send()` would have. A rejection from `offline()` propagates out of `sendOr()` — it's not swallowed.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, ... }) => void)`, `on('dropped', ({ userId, reason }) => void)` — **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
   - `reject` fires when an upgrade is rejected before a connection is established. `reason: 'origin'` is the Origin/CSWSH check (`{ status: 403, origin, req }`); `reason: 'maxConnectionsPerUser'` fires when a `userId` is already at `maxConnectionsPerUser` **on this instance** (`{ status: 429, userId, req }`) — it does not mean the user is at the cap cluster-wide (see [Limits](#limits)).
   - `dropped` fires when a `send()` delivery is skipped for one specific connection because it's stalled: `reason: 'maxBufferedBytes'` means that connection's `ws.bufferedAmount` exceeded `maxBufferedBytes`, so it was skipped and closed with code `1013` — the same `send()` still reaches the user's other, healthy connections normally.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
+- `isOnline(userId): Promise<boolean>` — whether `userId` has a live connection anywhere in the cluster. Derived from Redis `PUBSUB NUMSUB` on that user's channel: every online user already has a subscribed channel, so this gives cluster-wide presence with no extra state to maintain. **Accurate only within the heartbeat interval** (`30s`, see `heartbeat.ts`) — an unclean disconnect (network drop, laptop lid closed, no clean WebSocket close frame) leaves the channel subscribed until the ping/pong heartbeat notices the dead socket and terminates it, so `isOnline` can report `true` for up to roughly one heartbeat interval after a user's connection has actually died.
+- `whoIsOnline(userIds): Promise<Record<string, boolean>>` — batched `isOnline`: one `PUBSUB NUMSUB` call for every `userId` in `userIds`, instead of one round-trip per user. Same heartbeat-interval accuracy caveat as `isOnline` applies. Resolves `{}` for an empty array without a Redis round-trip.
+- `isConnectedHere(userId): boolean` — local-only fast path: whether `userId` has a live connection **on this instance specifically**, with no Redis round-trip. Synchronous, unlike `isOnline`/`whoIsOnline`, which check presence across the whole cluster.
 
 ### `attachNetifly(app, options)` — `@netiflyjs/express`
 

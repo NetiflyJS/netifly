@@ -380,7 +380,77 @@ describe('createNetifly', () => {
 
     await expect(
       server.netifly.send('netiflyServer-nobody-online', { type: 'x' })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ delivered: false, instances: 0 });
+  });
+
+  // NOT-13: PUBLISH's own return value is the number of subscribed
+  // receivers, which for Netifly is the number of server instances holding
+  // a live connection for that user — this is what lets send() tell the
+  // caller, at publish time, whether the user was reachable. Asserting
+  // `instances` is exactly 1 here (not just >= 1) is deliberate and
+  // deterministic: RedisRouter ref-counts subscriptions per userId, so one
+  // instance only ever issues a single SUBSCRIBE for a user regardless of
+  // how many local WebSocket connections that user has open (see NOT-5) —
+  // "instances" counts subscribed server processes, not sockets.
+  it('resolves send() with { delivered: true, instances: 1 } when the user has a live connection (NOT-13)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-delivered-online');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const messagePromise = nextMessage(client);
+    const result = await server.netifly.send('netiflyServer-delivered-online', { type: 'x' });
+    await messagePromise;
+
+    expect(result).toEqual({ delivered: true, instances: 1 });
+  });
+
+  it('sendOr() does not invoke offline() and returns the same SendResult as send() when the user is online (NOT-13)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sendor-online');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const offline = jest.fn();
+    const messagePromise = nextMessage(client);
+    const result = await server.netifly.sendOr(
+      'netiflyServer-sendor-online',
+      { type: 'x' },
+      { offline }
+    );
+    await messagePromise;
+
+    expect(result).toEqual({ delivered: true, instances: 1 });
+    expect(offline).not.toHaveBeenCalled();
+  });
+
+  it('sendOr() calls and awaits offline() before resolving when the user has no connections anywhere (NOT-13)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sendor-offline');
+    servers.push(server);
+
+    let offlineCompleted = false;
+    const offline = jest.fn(async () => {
+      await wait(20);
+      offlineCompleted = true;
+    });
+
+    const result = await server.netifly.sendOr(
+      'netiflyServer-nobody-online-sendor',
+      { type: 'x' },
+      { offline }
+    );
+
+    expect(result).toEqual({ delivered: false, instances: 0 });
+    expect(offline).toHaveBeenCalledTimes(1);
+    // Proves sendOr() actually awaited offline()'s returned promise before
+    // resolving, not merely that it was invoked.
+    expect(offlineCompleted).toBe(true);
   });
 
   it("disconnect() closes all of a user's local connections", async () => {
@@ -592,6 +662,59 @@ describe('createNetifly', () => {
   // every other instance, including the healthy second connection's ws,
   // keeps its real, prototype-level getter untouched. This is fast,
   // deterministic, and only stubs the exact seam deliverLocally reads.
+  // NOT-14: presence is derived from Redis PUBSUB NUMSUB on the per-user
+  // channel — every online user has a subscribed channel somewhere in the
+  // cluster, so isOnline()/whoIsOnline() work cross-instance with no extra
+  // state, while isConnectedHere() is a synchronous, local-only fast path.
+  it('isOnline() is true cross-instance via Redis while isConnectedHere() is local-only (NOT-14)', async () => {
+    const userId = 'netiflyServer-presence-cross-instance';
+    const serverA = await startTestServer(() => userId);
+    const serverB = await startTestServer(() => userId);
+    servers.push(serverA, serverB);
+
+    const connectedPromise = onceEvent(serverB.netifly, 'connect');
+    const client = await connectClient(serverB.port);
+    clients.push(client);
+    await connectedPromise;
+
+    await expect(serverA.netifly.isOnline(userId)).resolves.toBe(true);
+    expect(serverA.netifly.isConnectedHere(userId)).toBe(false);
+    expect(serverB.netifly.isConnectedHere(userId)).toBe(true);
+  });
+
+  it('isOnline() resolves false for a userId nobody is connected to anywhere (NOT-14)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-presence-nobody');
+    servers.push(server);
+
+    await expect(server.netifly.isOnline('netiflyServer-presence-nobody-home')).resolves.toBe(
+      false
+    );
+  });
+
+  it('whoIsOnline() returns correct booleans for a mix of online and offline userIds in one call (NOT-14)', async () => {
+    const onlineUserId = 'netiflyServer-presence-who-online';
+    const offlineUserId = 'netiflyServer-presence-who-offline';
+    const server = await startTestServer(() => onlineUserId);
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    await expect(server.netifly.whoIsOnline([onlineUserId, offlineUserId])).resolves.toEqual({
+      [onlineUserId]: true,
+      [offlineUserId]: false,
+    });
+  });
+
+  it('whoIsOnline([]) resolves {} without erroring (NOT-14)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-presence-empty');
+    servers.push(server);
+
+    await expect(server.netifly.whoIsOnline([])).resolves.toEqual({});
+  });
+
   it('skips delivery, emits "dropped", and closes with 1013 for a connection over maxBufferedBytes, without affecting other connections (NOT-7)', async () => {
     const userId = 'netiflyServer-buffered';
     const registered: unknown[] = [];
