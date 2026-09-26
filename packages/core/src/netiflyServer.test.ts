@@ -2,8 +2,9 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { createNetifly } from './netiflyServer';
+import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
-import type { CreateNetiflyOptions, NetiflyInstance } from './types';
+import type { CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -225,8 +226,8 @@ describe('createNetifly', () => {
     const server = await startTestServer(() => 'netiflyServer-origin-reject-event');
     servers.push(server);
 
-    const rejectPromise = new Promise<{ reason: string; status: number; origin: string | undefined }>(
-      (resolve) => server.netifly.on('reject', (info) => resolve(info))
+    const rejectPromise = new Promise<RejectInfo>((resolve) =>
+      server.netifly.on('reject', (info) => resolve(info))
     );
 
     await connectExpectingRejection(server.port, { origin: 'https://evil.example.com' });
@@ -489,6 +490,135 @@ describe('createNetifly', () => {
       expect(envelope.data).toEqual({ type: 'after-race' });
     } finally {
       subscribeSpy.mockRestore();
+    }
+  });
+
+  // NOT-7: `ws`'s default maxPayload is 100 MiB even though Netifly ignores
+  // client→server messages entirely — an easy memory/DoS vector. We don't
+  // reimplement `ws`'s own inbound frame-size enforcement here; this just
+  // proves the `maxPayload` option is actually wired into the WebSocketServer
+  // constructor, by observing the client-visible effect (a 1009 close) of a
+  // real oversized frame sent from a real client.
+  it('closes the connection with code 1009 when an inbound frame exceeds maxPayload (NOT-7)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-maxpayload', { maxPayload: 16 });
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const closePromise = new Promise<number>((resolve) => {
+      client.once('close', (code) => resolve(code));
+    });
+
+    client.send('x'.repeat(1024)); // far larger than the 16-byte maxPayload configured above
+
+    expect(await closePromise).toBe(1009);
+  });
+
+  // NOT-7: caps concurrent connections per userId so a single token can't
+  // open unbounded sockets. This is enforced per-instance (ConnectionRegistry
+  // only tracks local connections) — see the comment in netiflyServer.ts.
+  it('rejects a connection past maxConnectionsPerUser with 429 and emits "reject" (NOT-7)', async () => {
+    const userId = 'netiflyServer-maxconns';
+    const server = await startTestServer(() => userId, { maxConnectionsPerUser: 2 });
+    servers.push(server);
+
+    const firstConnected = onceEvent(server.netifly, 'connect');
+    const first = await connectClient(server.port);
+    clients.push(first);
+    await firstConnected;
+
+    const secondConnected = onceEvent(server.netifly, 'connect');
+    const second = await connectClient(server.port);
+    clients.push(second);
+    await secondConnected;
+
+    const rejectPromise = new Promise<RejectInfo>((resolve) =>
+      server.netifly.once('reject', (info) => resolve(info))
+    );
+
+    const { statusCode } = await connectExpectingRejection(server.port);
+
+    expect(statusCode).toBe(429);
+    const info = await rejectPromise;
+    expect(info).toMatchObject({ reason: 'maxConnectionsPerUser', status: 429, userId });
+  });
+
+  // NOT-7: a slow/stalled client's outbound buffer (ws.bufferedAmount) must
+  // not grow unbounded — deliverLocally should skip sending to a connection
+  // over maxBufferedBytes, emit 'dropped', and shed that one connection with
+  // close code 1013, while a user's other, healthy connections still get the
+  // message normally.
+  //
+  // Driving a real ws.bufferedAmount over a threshold deterministically means
+  // making the receiver stop reading, but that's slow/flaky over loopback
+  // (OS socket buffers are large, so it can take a while, if it happens at
+  // all, before the test's timeout). Instead we spy on
+  // ConnectionRegistry#add (the same pattern the NOT-5 race test above uses
+  // for RedisRouter#subscribe) purely to capture a reference to the exact
+  // server-side `ws` instance registered for the "stalled" client, then
+  // shadow `bufferedAmount` with an own property on that single instance —
+  // every other instance, including the healthy second connection's ws,
+  // keeps its real, prototype-level getter untouched. This is fast,
+  // deterministic, and only stubs the exact seam deliverLocally reads.
+  it('skips delivery, emits "dropped", and closes with 1013 for a connection over maxBufferedBytes, without affecting other connections (NOT-7)', async () => {
+    const userId = 'netiflyServer-buffered';
+    const registered: unknown[] = [];
+    const originalAdd = ConnectionRegistry.prototype.add;
+    const addSpy = jest
+      .spyOn(ConnectionRegistry.prototype, 'add')
+      .mockImplementation(function (this: ConnectionRegistry<unknown>, uid: string, connection: unknown) {
+        if (uid === userId) registered.push(connection);
+        return originalAdd.call(this, uid, connection);
+      });
+
+    try {
+      const server = await startTestServer(() => userId, { maxBufferedBytes: 1024 });
+      servers.push(server);
+
+      const firstConnected = onceEvent(server.netifly, 'connect');
+      const stalledClient = await connectClient(server.port);
+      clients.push(stalledClient);
+      await firstConnected;
+
+      const secondConnected = onceEvent(server.netifly, 'connect');
+      const healthyClient = await connectClient(server.port);
+      clients.push(healthyClient);
+      await secondConnected;
+
+      expect(registered).toHaveLength(2);
+      Object.defineProperty(registered[0], 'bufferedAmount', {
+        configurable: true,
+        get: () => 10 * 1024 * 1024, // well over the 1024-byte maxBufferedBytes above
+      });
+
+      const droppedPromise = new Promise<DroppedInfo>((resolve) =>
+        server.netifly.once('dropped', (info) => resolve(info))
+      );
+      const stalledClosePromise = new Promise<number>((resolve) =>
+        stalledClient.once('close', (code) => resolve(code))
+      );
+      const healthyMessagePromise = nextMessage(healthyClient);
+      let stalledReceivedMessage = false;
+      stalledClient.once('message', () => {
+        stalledReceivedMessage = true;
+      });
+
+      await server.netifly.send(userId, { type: 'buffered-check' });
+
+      const droppedInfo = await droppedPromise;
+      expect(droppedInfo).toMatchObject({ userId, reason: 'maxBufferedBytes' });
+      expect(await stalledClosePromise).toBe(1013);
+
+      const healthyEnvelope = JSON.parse(await healthyMessagePromise);
+      expect(healthyEnvelope.data).toEqual({ type: 'buffered-check' });
+
+      await wait(50);
+      expect(stalledReceivedMessage).toBe(false);
+    } finally {
+      addSpy.mockRestore();
     }
   });
 });

@@ -18,6 +18,9 @@ import type {
 
 const DEFAULT_PATH = '/netifly';
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_PAYLOAD = 4096;
+const DEFAULT_MAX_BUFFERED_BYTES = 1_048_576;
+const DEFAULT_MAX_CONNECTIONS_PER_USER = 10;
 
 class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private readonly wss: WebSocketServer;
@@ -26,6 +29,9 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
   private readonly resolveUserId: CreateNetiflyOptions['resolveUserId'];
   private readonly path: string;
   private readonly allowedOrigins: AllowedOrigins | undefined;
+  private readonly maxPayload: number;
+  private readonly maxBufferedBytes: number;
+  private readonly maxConnectionsPerUser: number;
   private readonly heartbeatTimer: NodeJS.Timeout;
   private readonly ulid = monotonicFactory();
   private closed = false;
@@ -35,6 +41,9 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     this.resolveUserId = options.resolveUserId;
     this.path = options.path ?? DEFAULT_PATH;
     this.allowedOrigins = options.allowedOrigins;
+    this.maxPayload = options.maxPayload ?? DEFAULT_MAX_PAYLOAD;
+    this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
+    this.maxConnectionsPerUser = options.maxConnectionsPerUser ?? DEFAULT_MAX_CONNECTIONS_PER_USER;
 
     this.registry = new ConnectionRegistry<WebSocket>({});
 
@@ -51,7 +60,7 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
       onError: (error) => this.emitError(error),
     });
 
-    this.wss = new WebSocketServer({ noServer: true });
+    this.wss = new WebSocketServer({ noServer: true, maxPayload: this.maxPayload });
     this.heartbeatTimer = startHeartbeat({
       intervalMs: HEARTBEAT_INTERVAL_MS,
       getClients: () => this.wss.clients,
@@ -92,6 +101,19 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     }
 
     const resolvedUserId = userId;
+
+    // Per-instance only: ConnectionRegistry tracks connections held by this
+    // process alone, so in a multi-instance deployment a single userId could
+    // still hold up to maxConnectionsPerUser connections on *each* instance,
+    // not maxConnectionsPerUser cluster-wide. Same caveat as disconnect()
+    // above/README — this bounds abuse per process, not globally.
+    if (this.registry.getConnections(resolvedUserId).size >= this.maxConnectionsPerUser) {
+      socket.once('finish', () => socket.destroy());
+      socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
+      this.emitReject({ reason: 'maxConnectionsPerUser', status: 429, userId: resolvedUserId, req });
+      return;
+    }
+
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       void this.registerConnection(resolvedUserId, ws);
     });
@@ -201,9 +223,21 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
 
   private deliverLocally(userId: UserId, rawMessage: string): void {
     for (const ws of this.registry.getConnections(userId)) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(rawMessage);
+      if (ws.readyState !== WebSocket.OPEN) {
+        continue;
       }
+      // A slow/stalled client (not reading fast enough, or at all) would
+      // otherwise let ws.send() queue data in bufferedAmount forever, growing
+      // server memory unbounded. Once a connection is over the threshold we
+      // stop sending to it and shed it with 1013 ("Try Again Later") instead
+      // — this only affects the one stalled connection, not the rest of the
+      // user's connections, which still receive the message normally below.
+      if (ws.bufferedAmount > this.maxBufferedBytes) {
+        this.emit('dropped', { userId, reason: 'maxBufferedBytes' });
+        ws.close(1013, 'Netifly: outbound buffer exceeded maxBufferedBytes');
+        continue;
+      }
+      ws.send(rawMessage);
     }
   }
 

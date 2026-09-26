@@ -35,14 +35,48 @@ export interface CreateNetiflyOptions {
   redisUrl?: string;
   path?: string;
   allowedOrigins?: AllowedOrigins;
+  /**
+   * Max inbound WebSocket frame size, in bytes. Netifly ignores client→server
+   * messages entirely, so this exists purely to bound memory/DoS exposure
+   * from the `ws` default of 100 MiB. `ws` enforces this itself, closing the
+   * connection with code 1009 ("Message Too Big") on an oversized frame.
+   * Defaults to 4096 (4 KB).
+   */
+  maxPayload?: number;
+  /**
+   * Max bytes allowed in a connection's outbound send buffer (`ws.bufferedAmount`)
+   * before it's considered stalled. Checked on every `send()` delivery; a
+   * connection over the limit is skipped and closed rather than left to
+   * accumulate unbounded server memory. Defaults to 1_048_576 (1 MB).
+   */
+  maxBufferedBytes?: number;
+  /**
+   * Max concurrent WebSocket connections for one `userId`, enforced on this
+   * instance only (see `ConnectionRegistry` — it tracks local connections
+   * only, so this is not a cluster-wide cap). Defaults to 10.
+   */
+  maxConnectionsPerUser?: number;
 }
 
-/** Emitted via the `reject` event when the origin check rejects an upgrade. */
-export interface RejectInfo {
-  reason: 'origin';
-  status: number;
-  origin: string | undefined;
-  req: IncomingMessage;
+/** Emitted via the `reject` event when an upgrade is rejected. */
+export type RejectInfo =
+  | {
+      reason: 'origin';
+      status: number;
+      origin: string | undefined;
+      req: IncomingMessage;
+    }
+  | {
+      reason: 'maxConnectionsPerUser';
+      status: number;
+      userId: UserId;
+      req: IncomingMessage;
+    };
+
+/** Emitted via the `dropped` event when a queued delivery is skipped for a connection. */
+export interface DroppedInfo {
+  userId: UserId;
+  reason: 'maxBufferedBytes';
 }
 
 export interface NetiflyInstance {
@@ -52,8 +86,10 @@ export interface NetiflyInstance {
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
   on(event: 'reject', listener: (info: RejectInfo) => void): this;
+  on(event: 'dropped', listener: (info: DroppedInfo) => void): this;
   once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
   once(event: 'reject', listener: (info: RejectInfo) => void): this;
+  once(event: 'dropped', listener: (info: DroppedInfo) => void): this;
   close(): Promise<void>;
 }
