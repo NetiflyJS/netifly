@@ -133,6 +133,45 @@ describe('RedisRouter', () => {
     );
   });
 
+  // NOT-14: presence is derived from PUBSUB NUMSUB on the per-user channel —
+  // every online user has a subscribed channel, so this gives cross-cluster
+  // presence with no extra state. Run on the publisher connection since the
+  // subscriber may be in RESP2 subscribe-mode.
+  it('numSubscribers() reflects an active subscriber and returns 0 for an unsubscribed userId', async () => {
+    const subscriberRouter = createRouter(() => {});
+    const otherRouter = createRouter(() => {});
+
+    await expect(otherRouter.numSubscribers('redisRouter-presence-nobody')).resolves.toBe(0);
+
+    await subscriberRouter.subscribe('redisRouter-presence-solo');
+    await expect(otherRouter.numSubscribers('redisRouter-presence-solo')).resolves.toBe(1);
+  });
+
+  it('numSubscribersMany() returns counts for every requested userId via a single NUMSUB call', async () => {
+    const subscriberRouter = createRouter(() => {});
+    const otherRouter = createRouter(() => {});
+
+    await subscriberRouter.subscribe('redisRouter-presence-many-a');
+
+    await expect(
+      otherRouter.numSubscribersMany([
+        'redisRouter-presence-many-a',
+        'redisRouter-presence-many-b',
+      ])
+    ).resolves.toEqual({
+      'redisRouter-presence-many-a': 1,
+      'redisRouter-presence-many-b': 0,
+    });
+  });
+
+  it('numSubscribersMany([]) resolves {} without calling Redis', async () => {
+    const otherRouter = createRouter(() => {});
+    const callSpy = jest.spyOn(otherRouter['publisher'], 'call');
+
+    await expect(otherRouter.numSubscribersMany([])).resolves.toEqual({});
+    expect(callSpy).not.toHaveBeenCalled();
+  });
+
   it('surfaces connection errors via onError instead of throwing', async () => {
     const onError = jest.fn();
     const router = new RedisRouter({

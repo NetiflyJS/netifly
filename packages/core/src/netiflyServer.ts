@@ -256,6 +256,23 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     return { v: ENVELOPE_VERSION, id: this.ulid(), type, data, ts: Date.now() };
   }
 
+  async isOnline(userId: UserId): Promise<boolean> {
+    return (await this.router.numSubscribers(userId)) > 0;
+  }
+
+  async whoIsOnline(userIds: UserId[]): Promise<Record<UserId, boolean>> {
+    const counts = await this.router.numSubscribersMany(userIds);
+    const online: Record<UserId, boolean> = {};
+    for (const userId of userIds) {
+      online[userId] = counts[userId] > 0;
+    }
+    return online;
+  }
+
+  isConnectedHere(userId: UserId): boolean {
+    return this.registry.hasConnections(userId);
+  }
+
   disconnect(userId: UserId): void {
     for (const ws of this.registry.getConnections(userId)) {
       ws.close();
