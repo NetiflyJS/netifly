@@ -1,14 +1,25 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import Redis from 'ioredis';
 import WebSocket from 'ws';
 import { createNetifly } from './netiflyServer';
 import { ConnectionRegistry } from './connectionRegistry';
-import { RedisRouter } from './redisRouter';
+import { RedisRouter, channelName } from './redisRouter';
 import type { CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
 jest.setTimeout(15000);
+
+async function numSubscribers(channel: string): Promise<number> {
+  const client = new Redis(REDIS_URL);
+  try {
+    const [, count] = (await client.call('PUBSUB', 'NUMSUB', channel)) as [string, number];
+    return count;
+  } finally {
+    client.disconnect();
+  }
+}
 
 interface TestServer {
   netifly: NetiflyInstance;
@@ -585,6 +596,24 @@ describe('createNetifly', () => {
     client.send('x'.repeat(1024)); // far larger than the 16-byte maxPayload configured above
 
     expect(await closePromise).toBe(1009);
+  });
+
+  // NOT-18: two apps (or staging/prod) sharing one Redis instance would
+  // otherwise collide on the same plain `netifly:user:<id>` channel. Passing
+  // `namespace` to createNetifly() must make the server actually SUBSCRIBE
+  // on the namespaced channel, not the default one.
+  it('applies namespace to the Redis channel used for subscriptions (NOT-18)', async () => {
+    const userId = 'netiflyServer-namespaced';
+    const server = await startTestServer(() => userId, { namespace: 'staging' });
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    expect(await numSubscribers(channelName(userId, 'staging'))).toBe(1);
+    expect(await numSubscribers(channelName(userId))).toBe(0);
   });
 
   // NOT-7: caps concurrent connections per userId so a single token can't

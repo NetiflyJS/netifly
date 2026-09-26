@@ -125,6 +125,14 @@ REDIS_URL=rediss://user:password@host:6380/0
 
 or explicitly via the `redisUrl` option to `createNetifly()`/`attachNetifly()`, which takes priority over the env var. There is **no default/fallback connection** — if neither `redisUrl` nor `REDIS_URL` is provided, `createNetifly()`/`attachNetifly()` throws a clear error immediately rather than silently connecting to a local Redis instance.
 
+### Sharing one Redis instance across apps or environments
+
+Upstash and Redis Cloud free tiers typically give you a single Redis instance, which people often reuse across multiple apps or environments (e.g. staging and prod). Without a `namespace`, Netifly's per-user channel names (`netifly:user:<id>`) collide across those, and a `userId` that exists in more than one of them will receive the other's notifications. Set `namespace` to scope the channel to `netifly:<namespace>:user:<id>` instead:
+
+```ts
+createNetifly({ server, resolveUserId, namespace: 'staging' });
+```
+
 ## 🛡️ Security
 
 ### Origin allowlist
@@ -206,6 +214,7 @@ Non-Node publishers (e.g. publishing directly to a Netifly Redis channel from an
 | `maxPayload` | `number` | — | Max inbound WebSocket frame size, in bytes. Netifly ignores client→server messages, so this just bounds memory/DoS exposure from `ws`'s 100 MiB default. `ws` closes the connection with code `1009` on an oversized frame. Defaults to `4096` (4 KB). |
 | `maxBufferedBytes` | `number` | — | Max bytes allowed in a connection's outbound send buffer (`ws.bufferedAmount`) before it's treated as stalled and shed (see [Limits](#limits)). Defaults to `1_048_576` (1 MB). |
 | `maxConnectionsPerUser` | `number` | — | Max concurrent WebSocket connections for one `userId`, **on this instance** (see [Limits](#limits)). Defaults to `10`. |
+| `namespace` | `string` | — | Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of the default `netifly:user:<id>` — use this when multiple apps/environments share one Redis instance (see [Redis Configuration](#-redis-configuration)). Defaults to unset (no namespace). |
 
 Returns a `NetiflyInstance`:
 
