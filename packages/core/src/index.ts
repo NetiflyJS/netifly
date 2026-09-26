@@ -3,6 +3,7 @@ export { ENVELOPE_VERSION } from './types';
 export type {
   AllowedOrigins,
   CreateNetiflyOptions,
+  DroppedInfo,
   Envelope,
   NetiflyInstance,
   RejectInfo,

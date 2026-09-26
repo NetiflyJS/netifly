@@ -138,11 +138,14 @@ Beyond the Origin check, enforcement happens inside `resolveUserId` — Netifly 
 
 ### Limits
 
-Netifly ships with no built-in rate limiting, per-user connection caps, or message-size limits — `resolveUserId` and `send()` run as fast as your app calls them. If you need to bound abuse, enforce it at your layer:
+Netifly ships with built-in defaults for the three most common abuse vectors — inbound frame size, outbound buffer growth, and connections per user — configurable via `createNetifly()`/`attachNetifly()` options (see [API Reference](#-api-reference)):
 
-- **Connections per user** — reject in `resolveUserId` (e.g. check a counter you maintain in Redis) once a user already holds too many open sockets.
-- **Message rate / size** — validate before calling `send()`, or front the upgrade endpoint with a reverse proxy or API gateway that enforces connection and body-size limits.
+- **Inbound frame size** — `maxPayload` (default `4096` bytes) bounds the size of any WebSocket frame a client sends. Netifly ignores client→server messages entirely, so this exists purely to cap memory/DoS exposure from `ws`'s 100 MiB default; an oversized frame closes the connection with code `1009`.
+- **Outbound buffer growth** — `maxBufferedBytes` (default `1_048_576`, 1 MB) bounds how much a `send()` is allowed to queue in a single connection's outbound buffer (`ws.bufferedAmount`) before that connection is considered stalled. A connection over the limit is skipped for that delivery, closed with code `1013`, and reported via the `dropped` event — a slow or stuck client can't grow server memory without limit, and it doesn't affect delivery to the user's other, healthy connections.
+- **Connections per user** — `maxConnectionsPerUser` (default `10`) caps how many concurrent sockets one `userId` can hold **on a single instance**. Exceeding it rejects the upgrade with `429 Too Many Requests` and a `reject` event (`reason: 'maxConnectionsPerUser'`). This is enforced per-instance only — like `disconnect()` below, `ConnectionRegistry` only tracks local connections, so in a multi-instance deployment a user could still hold `maxConnectionsPerUser` connections on *each* instance, not `maxConnectionsPerUser` cluster-wide. If you need a cluster-wide cap, track a shared counter yourself (e.g. in Redis) and reject in `resolveUserId`.
+- **Message rate** — Netifly has no built-in rate limiting on `send()` calls. Validate before calling it, or front the upgrade endpoint with a reverse proxy or API gateway that enforces rate limits.
 - **`disconnect(userId)` is local-only** (see [API Reference](#-api-reference)) — it is not a substitute for revoking a compromised session cluster-wide; prefer short-lived tokens `resolveUserId` can reject once revoked.
+
 ## ✉️ Message Envelope
 
 This is a **public wire contract**: every message Netifly delivers over the WebSocket — regardless of which `send()` overload produced it — is wrapped in this envelope:
@@ -178,13 +181,18 @@ Non-Node publishers (e.g. publishing directly to a Netifly Redis channel from an
 | `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Netifly throws at construction time if neither is set (no default/local fallback). |
 | `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
 | `allowedOrigins` | `(string \| RegExp)[] \| ((origin: string \| undefined) => boolean) \| '*'` | — | Controls the CSWSH origin check (see [Security](#-security)). Defaults to same-host only. |
+| `maxPayload` | `number` | — | Max inbound WebSocket frame size, in bytes. Netifly ignores client→server messages, so this just bounds memory/DoS exposure from `ws`'s 100 MiB default. `ws` closes the connection with code `1009` on an oversized frame. Defaults to `4096` (4 KB). |
+| `maxBufferedBytes` | `number` | — | Max bytes allowed in a connection's outbound send buffer (`ws.bufferedAmount`) before it's treated as stalled and shed (see [Limits](#limits)). Defaults to `1_048_576` (1 MB). |
+| `maxConnectionsPerUser` | `number` | — | Max concurrent WebSocket connections for one `userId`, **on this instance** (see [Limits](#limits)). Defaults to `10`. |
 
 Returns a `NetiflyInstance`:
 
 - `send<T>(userId, payload: T): Promise<void>` — wraps `payload` as `{ v, id, type: "message", data: payload, ts }` (see [Message Envelope](#message-envelope)) and delivers it to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
 - `send<T>(userId, type: string, data: T): Promise<void>` — same delivery semantics, but wraps as `{ v, id, type, data, ts }` with the `type` you provide instead of the `"message"` default.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
-- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, origin, req }) => void)` — `reject` fires when the Origin check rejects an upgrade. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
+- `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, ... }) => void)`, `on('dropped', ({ userId, reason }) => void)` — **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
+  - `reject` fires when an upgrade is rejected before a connection is established. `reason: 'origin'` is the Origin/CSWSH check (`{ status: 403, origin, req }`); `reason: 'maxConnectionsPerUser'` fires when a `userId` is already at `maxConnectionsPerUser` **on this instance** (`{ status: 429, userId, req }`) — it does not mean the user is at the cap cluster-wide (see [Limits](#limits)).
+  - `dropped` fires when a `send()` delivery is skipped for one specific connection because it's stalled: `reason: 'maxBufferedBytes'` means that connection's `ws.bufferedAmount` exceeded `maxBufferedBytes`, so it was skipped and closed with code `1013` — the same `send()` still reaches the user's other, healthy connections normally.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
 ### `attachNetifly(app, options)` — `@netiflyjs/express`
