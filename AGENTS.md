@@ -35,6 +35,10 @@ CI (`.github/workflows/ci.yml`) runs all three plus `pnpm build` on Node 18 and 
 
 ## Branching
 
+**All work happens on a branch; `main` only moves via merged pull requests.** Never commit
+directly to `main` — create a branch, commit there, push it, and open a PR. This holds even
+for small fixes and docs-only changes.
+
 **Name branches after the ticket, not the change.** Tickets live in Linear under the `NOT`
 project prefix (e.g. `NOT-42`). Branch names are the ticket id, optionally with a short
 kebab-case slug appended:
@@ -77,5 +81,6 @@ and publish each package independently — don't hand-edit `CHANGELOG.md` or pac
 
 - Keep `README.md` and each package's `README.md`/`LICENSE` in sync — the release workflow
   copies the root `README.md`/`LICENSE` into each package on release, so edit the root copies.
-- PRs merge into `main`; `main` triggers CI, and a successful CI run on `main` triggers the
+- `main` only advances via a merged PR from a branch (see Branching above) — never a direct
+  push or commit to `main`. `main` triggers CI, and a successful CI run on `main` triggers the
   release workflow (`semantic-release` per package). Don't bypass CI to merge.
