@@ -1,3 +1,10 @@
+# [@netiflyjs/core-v1.5.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.4.0...@netiflyjs/core-v1.5.0) (2026-09-26)
+
+
+### Features
+
+* **core:** bound inbound frame size, outbound buffers, and connections per user ([1669886](https://github.com/NetiflyJS/netifly/commit/16698862d22da18165a02182faa05b0d15e705fa))
+
 # [@netiflyjs/core-v1.4.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.3.1...@netiflyjs/core-v1.4.0) (2026-09-25)
 
 
