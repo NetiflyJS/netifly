@@ -1,3 +1,10 @@
+# [@netiflyjs/express-v1.5.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.4.0...@netiflyjs/express-v1.5.0) (2026-09-26)
+
+
+### Features
+
+* **express:** add req.netifly convenience middleware ([ac00d57](https://github.com/NetiflyJS/netifly/commit/ac00d57c27f58274f0b4aef637b461221079e289))
+
 # [@netiflyjs/express-v1.4.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.3.0...@netiflyjs/express-v1.4.0) (2026-09-25)
 
 
