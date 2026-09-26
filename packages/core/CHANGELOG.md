@@ -1,3 +1,11 @@
+# [@netiflyjs/core-v1.6.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.5.0...@netiflyjs/core-v1.6.0) (2026-09-26)
+
+
+### Features
+
+* **core:** add presence API (isOnline, whoIsOnline, isConnectedHere) ([d218a8e](https://github.com/NetiflyJS/netifly/commit/d218a8e883b75d81da806e60e930c6e8ca2142cb)), closes [RedisRouter#numSubscribers](https://github.com/RedisRouter/issues/numSubscribers) [NetiflyInstance#isOnline](https://github.com/NetiflyInstance/issues/isOnline)
+* **core:** delivery-aware send() returning { delivered, instances }, plus sendOr() ([6db1907](https://github.com/NetiflyJS/netifly/commit/6db190707edc2d80a28deeb79d9e37ab3b5455c0)), closes [RedisRouter#publish](https://github.com/RedisRouter/issues/publish)
+
 # [@netiflyjs/core-v1.5.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.4.0...@netiflyjs/core-v1.5.0) (2026-09-26)
 
 
