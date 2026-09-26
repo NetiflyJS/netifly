@@ -13,6 +13,8 @@ import type {
   Envelope,
   NetiflyInstance,
   RejectInfo,
+  SendOrOptions,
+  SendResult,
   UserId,
 } from './types';
 
@@ -241,15 +243,41 @@ class NetiflyServerImpl extends EventEmitter implements NetiflyInstance {
     }
   }
 
-  async send<T>(userId: UserId, payload: T): Promise<void>;
-  async send<T>(userId: UserId, type: string, data: T): Promise<void>;
-  async send<T>(userId: UserId, ...rest: [T] | [string, T]): Promise<void> {
+  async send<T>(userId: UserId, payload: T): Promise<SendResult>;
+  async send<T>(userId: UserId, type: string, data: T): Promise<SendResult>;
+  async send<T>(userId: UserId, ...rest: [T] | [string, T]): Promise<SendResult> {
+    return this.sendInternal(userId, rest);
+  }
+
+  async sendOr<T>(userId: UserId, payload: T, options: SendOrOptions): Promise<SendResult>;
+  async sendOr<T>(
+    userId: UserId,
+    type: string,
+    data: T,
+    options: SendOrOptions
+  ): Promise<SendResult>;
+  async sendOr<T>(
+    userId: UserId,
+    ...rest: [T, SendOrOptions] | [string, T, SendOrOptions]
+  ): Promise<SendResult> {
+    const options = rest[rest.length - 1] as SendOrOptions;
+    const sendRest = (rest.length === 3 ? [rest[0], rest[1]] : [rest[0]]) as [T] | [string, T];
+
+    const result = await this.sendInternal(userId, sendRest);
+    if (!result.delivered) {
+      await options.offline();
+    }
+    return result;
+  }
+
+  private async sendInternal<T>(userId: UserId, rest: [T] | [string, T]): Promise<SendResult> {
     if (this.closed) {
       throw new Error('Netifly: cannot send after close()');
     }
     const envelope =
       rest.length === 2 ? this.buildEnvelope(rest[0], rest[1]) : this.buildEnvelope('message', rest[0]);
-    await this.router.publish(userId, envelope);
+    const instances = await this.router.publish(userId, envelope);
+    return { delivered: instances > 0, instances };
   }
 
   private buildEnvelope<T>(type: string, data: T): Envelope<T> {

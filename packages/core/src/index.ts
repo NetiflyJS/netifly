@@ -8,5 +8,7 @@ export type {
   NetiflyInstance,
   RejectInfo,
   ResolveUserId,
+  SendOrOptions,
+  SendResult,
   UserId,
 } from './types';
