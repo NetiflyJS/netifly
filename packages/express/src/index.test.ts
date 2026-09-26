@@ -66,4 +66,45 @@ describe('attachNetifly', () => {
     expect(server).toBe(existingServer);
     await netifly.close();
   });
+
+  it('exposes req.netifly so a route handler can send without the closed-over variable', async () => {
+    const app = express();
+
+    const { server, netifly } = attachNetifly(app, {
+      resolveUserId: () => 'netiflyExpress-req-netifly',
+      redisUrl: REDIS_URL,
+    });
+
+    app.post('/notify', (req, res) => {
+      // Deliberately use req.netifly instead of the closed-over `netifly` above,
+      // to prove the convenience property works from inside a route handler.
+      req.netifly.send('netiflyExpress-req-netifly', { via: 'req.netifly' });
+      res.status(202).end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    const connectedPromise = onceEvent(netifly, 'connect');
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`);
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+    await connectedPromise;
+
+    const messagePromise = new Promise<string>((resolve) => {
+      ws.once('message', (data) => resolve(data.toString()));
+    });
+
+    const httpResponse = await fetch(`http://127.0.0.1:${port}/notify`, { method: 'POST' });
+    expect(httpResponse.status).toBe(202);
+
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ via: 'req.netifly' });
+
+    ws.close();
+    await netifly.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
 });

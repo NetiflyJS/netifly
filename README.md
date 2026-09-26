@@ -87,6 +87,16 @@ app.post('/comments', (req, res) => {
 server.listen(3000);
 ```
 
+`attachNetifly` also mounts a middleware that exposes the same instance as `req.netifly` on every request, so route handlers defined elsewhere in your app don't need the closed-over `netifly` variable threaded through:
+
+```ts
+app.post('/comments', (req, res) => {
+  const comment = createComment(req.body);
+  req.netifly.send(comment.authorId, 'comment.created', comment); // same instance, via req
+  res.status(201).json(comment);
+});
+```
+
 > ⚠️ WebSocket upgrade requests bypass Express's routing/middleware entirely, so `resolveUserId` always receives the raw Node `IncomingMessage`, not an Express `Request`.
 
 > 🛡️ Netifly rejects cross-origin upgrades by default (see [Security](#-security) below) — if you need to accept them (e.g. a token-in-query setup, or a non-browser client that omits `Origin`), configure `allowedOrigins`.
@@ -198,6 +208,8 @@ Returns a `NetiflyInstance`:
 ### `attachNetifly(app, options)` — `@netiflyjs/express`
 
 Same `options` as `createNetifly`, minus `server` (optional — pass your own, or let it create one from the Express app). Returns `{ server, netifly }`.
+
+It also mounts a middleware on `app` that sets `req.netifly: NetiflyInstance` on every request `app` handles, so route handlers can call `req.netifly.send(...)` directly instead of importing/threading the returned `netifly` value.
 
 ## 🏗️ Architecture
 
