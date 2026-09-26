@@ -79,7 +79,13 @@ export class RedisRouter {
     this.refCounts.set(userId, count - 1);
   }
 
-  async publish(userId: UserId, payload: unknown): Promise<void> {
+  /**
+   * Returns the number of subscribers that received the message (Redis
+   * PUBLISH's own return value) — for Netifly, this is the number of server
+   * instances currently holding a live connection for `userId`, which lets
+   * callers know at publish time whether the user was reachable (see NOT-13).
+   */
+  async publish(userId: UserId, payload: unknown): Promise<number> {
     let serialized: string;
     try {
       serialized = JSON.stringify(payload);
@@ -89,7 +95,7 @@ export class RedisRouter {
       (serializationError as Error & { cause?: unknown }).cause = error;
       throw serializationError;
     }
-    await this.publisher.publish(channelName(userId), serialized);
+    return this.publisher.publish(channelName(userId), serialized);
   }
 
   async close(): Promise<void> {

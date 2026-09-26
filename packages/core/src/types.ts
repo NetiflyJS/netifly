@@ -79,9 +79,36 @@ export interface DroppedInfo {
   reason: 'maxBufferedBytes';
 }
 
+/**
+ * Result of a `send()`/`sendOr()` call. `instances` is the number of server
+ * instances that held a live connection for the user at publish time (Redis
+ * PUBLISH's own subscriber count), and `delivered` is just `instances > 0`.
+ *
+ * Caveat: this means the message reached a server process holding a live
+ * socket for that user — not that the user actually saw it rendered on
+ * screen. Delivery acknowledgements/read-receipts are out of scope here and
+ * may be a future addition.
+ */
+export interface SendResult {
+  delivered: boolean;
+  instances: number;
+}
+
+export interface SendOrOptions {
+  /** Called (and awaited, if it returns a promise) when the send was not delivered anywhere. */
+  offline: () => void | Promise<void>;
+}
+
 export interface NetiflyInstance {
-  send<T>(userId: UserId, payload: T): Promise<void>;
-  send<T>(userId: UserId, type: string, data: T): Promise<void>;
+  send<T>(userId: UserId, payload: T): Promise<SendResult>;
+  send<T>(userId: UserId, type: string, data: T): Promise<SendResult>;
+  /**
+   * Like `send()`, but calls (and awaits) `options.offline()` when the
+   * message wasn't delivered to any connection anywhere in the cluster.
+   * Resolves with the same `SendResult` either way.
+   */
+  sendOr<T>(userId: UserId, payload: T, options: SendOrOptions): Promise<SendResult>;
+  sendOr<T>(userId: UserId, type: string, data: T, options: SendOrOptions): Promise<SendResult>;
   disconnect(userId: UserId): void;
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
