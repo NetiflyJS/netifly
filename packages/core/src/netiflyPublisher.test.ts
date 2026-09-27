@@ -1,6 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
+import type Redis from 'ioredis';
 import { createNetifly } from './netiflyServer';
 import { createNetiflyPublisher } from './netiflyPublisher';
 import type { CreateNetiflyOptions, NetiflyInstance, NetiflyPublisher } from './types';
@@ -238,5 +239,22 @@ describe('createNetiflyPublisher', () => {
     await expect(publisher.isOnline('netiflyPublisher-after-close')).rejects.toThrow(
       'Netifly: cannot use publisher after close()'
     );
+  });
+
+  // Same root cause as RedisRouter's equivalent test (see redisDisconnect.ts):
+  // ioredis's disconnect() is fire-and-forget and leaves a fallback timer
+  // armed until the socket's own 'close' event clears it. A publisher that
+  // has actually connected (unlike the lazyConnect-and-never-used case above)
+  // needs to wait for that before close() resolves, or the still-armed timer
+  // shows up as a Jest open handle.
+  it('close() waits for the underlying Redis connection to fully disconnect', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    await publisher.send('netiflyPublisher-close-waits', { type: 'x' }); // forces a real connection
+    await publisher.close();
+    publishers.pop(); // already closed above; afterEach would double-close otherwise
+
+    expect((publisher as unknown as { redis: Redis }).redis.status).toBe('end');
   });
 });

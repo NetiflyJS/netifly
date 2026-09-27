@@ -5,7 +5,7 @@ import WebSocket from 'ws';
 import { createNetifly } from './netiflyServer';
 import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter, channelName } from './redisRouter';
-import type { CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
+import type { CloseOptions, CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -24,7 +24,7 @@ async function numSubscribers(channel: string): Promise<number> {
 interface TestServer {
   netifly: NetiflyInstance;
   port: number;
-  close: () => Promise<void>;
+  close: (options?: CloseOptions) => Promise<void>;
 }
 
 async function startTestServer(
@@ -45,8 +45,8 @@ async function startTestServer(
   return {
     netifly,
     port,
-    close: async () => {
-      await netifly.close();
+    close: async (options?: CloseOptions) => {
+      await netifly.close(options);
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
   };
@@ -530,6 +530,33 @@ describe('createNetifly', () => {
     servers.pop(); // already closed above; skip afterEach double-close
   });
 
+  // Regression: several NOT-19 tests below need to pass CloseOptions, so they
+  // called `server.netifly.close(options)` directly instead of the
+  // `server.close()` test helper above — which bypassed the helper's own
+  // `httpServer.close()` call, leaking a TCPSERVERWRAP handle per test (found
+  // via `--detectOpenHandles`). The helper's `close()` now forwards options
+  // to `netifly.close()` too, so there's no reason to bypass it — this test
+  // proves the fix by checking the port is actually released (a listening
+  // TCP socket that's still open would make a fresh bind to the same port
+  // fail with EADDRINUSE).
+  it('the close() test helper releases the underlying http.Server even when passing CloseOptions', async () => {
+    const server = await startTestServer(() => 'netiflyServer-close-releases-port');
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    await server.close({ force: true });
+
+    const probe = http.createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once('error', reject);
+      probe.listen(server.port, resolve);
+    });
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+  });
+
   // NOT-19: close() should send a real close frame with code 1012 ("Service
   // Restart") instead of terminate()-ing every socket, so clients can tell a
   // graceful shutdown apart from an abrupt drop and reconnect accordingly.
@@ -546,7 +573,7 @@ describe('createNetifly', () => {
       client.once('close', (code) => resolve(code));
     });
 
-    await server.netifly.close();
+    await server.close();
     servers.pop(); // already closed above; skip afterEach double-close
 
     expect(await clientClosePromise).toBe(1012);
@@ -592,7 +619,7 @@ describe('createNetifly', () => {
 
       const started = Date.now();
       await Promise.race([
-        server.netifly.close({ drainMs: 75 }),
+        server.close({ drainMs: 75 }),
         wait(3000).then(() => {
           throw new Error('close() did not resolve within 3000ms despite an unresponsive client');
         }),
@@ -630,7 +657,7 @@ describe('createNetifly', () => {
 
     const started = Date.now();
     await Promise.race([
-      server.netifly.close({ force: true, drainMs: 60_000 }),
+      server.close({ force: true, drainMs: 60_000 }),
       wait(2000).then(() => {
         throw new Error('close({ force: true }) did not resolve promptly');
       }),
@@ -651,7 +678,7 @@ describe('createNetifly', () => {
     const server = await startTestServer(() => 'netiflyServer-gina');
     servers.push(server);
 
-    await server.netifly.close();
+    await server.close();
     await expect(server.netifly.send('netiflyServer-gina', { type: 'x' })).rejects.toThrow(
       'Netifly: cannot send after close()'
     );

@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { monotonicFactory } from 'ulid';
+import { disconnectRedis } from './redisDisconnect';
 import { channelName } from './redisRouter';
 import { ENVELOPE_VERSION } from './types';
 import type {
@@ -110,7 +111,7 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap> implements Netifl
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.redis.disconnect();
+    await disconnectRedis(this.redis);
   }
 }
 

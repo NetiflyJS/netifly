@@ -271,4 +271,36 @@ describe('RedisRouter', () => {
 
     expect(onError).toHaveBeenCalled();
   });
+
+  // Jest's "did not exit one second after the test run has completed" /
+  // --detectOpenHandles warning across this whole suite traces to this exact
+  // spot: RedisRouter#close() calls ioredis's disconnect() but never waits
+  // for it. disconnect() calls stream.end() and arms a fallback setTimeout
+  // that force-destroys the socket if it isn't closed already — cleared via
+  // the stream's own 'close' event once the TCP teardown actually completes.
+  // Since close() doesn't await that, Jest's own end-of-run open-handle check
+  // can run before the teardown finishes, catching that still-armed timeout
+  // (usually milliseconds from clearing itself, but that's still a real
+  // handle at the moment Jest checks). ioredis's Redis instances emit their
+  // own 'end' event once a connection is fully, finally closed — awaiting
+  // that (see redisDisconnect.ts) is what actually closes the race, and
+  // `status === 'end'` afterward is the observable proof: it's the same
+  // event that fires *after* the connector's fallback timeout has already
+  // been cleared, so close() resolving here without the caller waiting any
+  // further means it's already gone.
+  it('close() waits for both Redis connections to fully disconnect, not just fire-and-forget', async () => {
+    const router = new RedisRouter({ redisUrl: REDIS_URL, onMessage: () => {} });
+    // Not pushed to `routers` — this test calls close() itself.
+
+    await router.subscribe('redisRouter-close-waits');
+    await router.close();
+
+    expect(router['publisher'].status).toBe('end');
+    expect(router['subscriber'].status).toBe('end');
+  });
+
+  it('close() still resolves, bounded, for a router that never successfully connected', async () => {
+    const router = new RedisRouter({ redisUrl: 'redis://127.0.0.1:1', onMessage: () => {} });
+    await expect(router.close()).resolves.toBeUndefined();
+  });
 });
