@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import type { UserId } from './connectionRegistry';
+import { disconnectRedis } from './redisDisconnect';
 
 export interface RedisRouterOptions {
   redisUrl: string;
@@ -171,7 +172,6 @@ export class RedisRouter {
   }
 
   async close(): Promise<void> {
-    this.publisher.disconnect();
-    this.subscriber.disconnect();
+    await Promise.all([disconnectRedis(this.publisher), disconnectRedis(this.subscriber)]);
   }
 }
