@@ -1,6 +1,6 @@
 {
   "name": "@netiflyjs/client",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Zero-dependency browser/Node WebSocket client for Netifly — reconnects with full-jitter backoff and typed event handlers.",
   "license": "MIT",
   "repository": {
@@ -20,7 +20,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "size": "size-limit"
   },
-  "dependencies": {},
   "devDependencies": {
     "@netiflyjs/core": "workspace:*",
     "@size-limit/esbuild": "^11.1.4",
