@@ -77,6 +77,31 @@ and publish each package independently — don't hand-edit `CHANGELOG.md` or pac
 - Design specs and plans for larger changes live under `docs/superpowers/specs` and
   `docs/superpowers/plans` — check there for context before large features.
 
+## Documentation
+
+The published docs site (GitBook, org "Netifly") is **Git Synced** to `docs/site/`
+in this repo — that folder is the source of truth, not GitBook's editor.
+
+- Content lives in `docs/site/` using GitBook's Git Sync format: a root
+  `README.md` (the site's front page), a `SUMMARY.md` that defines the nav
+  tree, and nested folders/files matching it (e.g. `recipes/`, `reference/`).
+- **Adding a page means two edits**: the file under `docs/site/`, *and* an
+  entry in `docs/site/SUMMARY.md` — GitBook will not display a page that
+  isn't listed there. Every link in `SUMMARY.md` and between docs pages must
+  resolve to a real file (see `docs/superpowers/specs/2026-09-27-docs-site-design.md`
+  for the validation approach used when this was scaffolded).
+- Some pages are intentionally stubs (marked with a `> **Status:** stub`
+  line) — recipes and per-package API reference detail. Expanding them is
+  ordinary docs work: edit in place, remove the stub marker once complete.
+- Git Sync itself (connecting the GitBook space to this repo/path, choosing
+  sync direction) is configured in the GitBook app, not from a coding
+  session — this MCP/CLI cannot wire that up. If Git Sync ever needs
+  reconnecting, that's a manual step in GitBook's UI, not something to
+  script around.
+- Treat `docs/site/` like code: change it on a branch, open a PR, get it
+  reviewed. On merge, GitBook picks up the change automatically via Git
+  Sync (Git → GitBook direction).
+
 ## Pull requests
 
 - Keep `README.md` and each package's `README.md`/`LICENSE` in sync — the release workflow
