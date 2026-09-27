@@ -1,3 +1,10 @@
+# [@netiflyjs/core-v1.10.1](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.10.0...@netiflyjs/core-v1.10.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **core:** wait for Redis disconnect to actually finish, fixing Jest open-handle warnings ([6f4d1ce](https://github.com/NetiflyJS/netifly/commit/6f4d1ce8c709c6b288762c00c374ed2fbba53598))
+
 # [@netiflyjs/core-v1.10.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.9.0...@netiflyjs/core-v1.10.0) (2026-09-26)
 
 
