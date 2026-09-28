@@ -24,6 +24,34 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
   private readonly ulid = monotonicFactory();
   private closed = false;
 
+  // Overridden so a throwing/rejecting 'sent' listener can never crash the
+  // host process (NOT-30 spec §9) — NetiflyPublisher has no 'error' event to
+  // route a failure to (unlike NetiflyInstance), so it's caught and dropped;
+  // preventing the crash is what matters here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.on(event, this.wrapListener(listener));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  once(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.once(event, this.wrapListener(listener));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private wrapListener(listener: (...args: any[]) => void): (...args: any[]) => void {
+    return (...args: any[]) => {
+      try {
+        const result: unknown = listener(...args);
+        if (result instanceof Promise) {
+          result.catch(() => undefined);
+        }
+      } catch {
+        // No 'error' event to report through — dropping is the point.
+      }
+    };
+  }
+
   constructor(options: CreateNetiflyPublisherOptions<Events>) {
     super();
     this.namespace = options.namespace;

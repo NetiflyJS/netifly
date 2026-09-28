@@ -1311,4 +1311,116 @@ describe('createNetifly', () => {
     const info = await sentPromise;
     expect(info.userId).toBe('netiflyServer-sent-hook-sendor');
   });
+
+  it('isolates a throwing "sent" listener: send() still resolves and publishes, and "error" fires', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sent-throws');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('sent', () => {
+      throw new Error('boom-sent');
+    });
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const messagePromise = nextMessage(client);
+    const result = await server.netifly.send('netiflyServer-sent-throws', { ok: true });
+
+    expect(result.delivered).toBe(true);
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ ok: true });
+    expect(errors.map((e) => e.message)).toContain('boom-sent');
+  });
+
+  it('isolates a throwing "delivered" listener from crashing and from other listeners', async () => {
+    const server = await startTestServer(() => 'netiflyServer-delivered-throws');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    const secondListenerCalls: unknown[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('delivered', () => {
+      throw new Error('boom-delivered');
+    });
+    server.netifly.on('delivered', (info) => secondListenerCalls.push(info));
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send(JSON.stringify({ type: 'ack', id: 'x' }));
+    await wait(100);
+
+    expect(errors.map((e) => e.message)).toContain('boom-delivered');
+    expect(secondListenerCalls).toHaveLength(1);
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('isolates an async-rejecting "malformedFrame" listener', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-rejects');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('malformedFrame', async () => {
+      throw new Error('boom-malformed-async');
+    });
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send('not json');
+    await wait(100);
+
+    expect(errors.map((e) => e.message)).toContain('boom-malformed-async');
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('isolates a throwing "response" listener', async () => {
+    const server = await startTestServer(() => 'netiflyServer-response-throws');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('response', () => {
+      throw new Error('boom-response');
+    });
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send(JSON.stringify({ type: 'response', id: 'x', payload: {} }));
+    await wait(100);
+
+    expect(errors.map((e) => e.message)).toContain('boom-response');
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('a "once" listener on a new event still fires exactly once despite the safety wrapper', async () => {
+    const server = await startTestServer(() => 'netiflyServer-once-still-once');
+    servers.push(server);
+
+    const calls: unknown[] = [];
+    server.netifly.once('delivered', (info) => calls.push(info));
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send(JSON.stringify({ type: 'ack', id: 'first' }));
+    client.send(JSON.stringify({ type: 'ack', id: 'second' }));
+    await wait(100);
+
+    expect(calls).toHaveLength(1);
+  });
 });

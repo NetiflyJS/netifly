@@ -35,6 +35,15 @@ const DEFAULT_MAX_CONNECTIONS_PER_USER = 10;
 const DEFAULT_MAX_INBOUND_FRAMES_PER_SECOND = 20;
 const DEFAULT_DRAIN_MS = 5000;
 
+// Events introduced for client acks/read state (NOT-30) — a listener that
+// throws or rejects on one of these must never crash the host process or
+// block other listeners for the same event (spec §9). Registered listeners
+// for these events are wrapped (see wrapListener) so a bad app hook — e.g.
+// one that persists to a database and occasionally rejects — can't take the
+// server down. Pre-existing events ('connect'/'disconnect'/'error'/
+// 'reject'/'dropped') keep their existing unwrapped behavior.
+const SAFE_EVENTS = new Set(['sent', 'delivered', 'read', 'response', 'malformedFrame']);
+
 class NetiflyServerImpl<Events extends EventMap = EventMap>
   extends EventEmitter
   implements NetiflyInstance<Events>
@@ -91,6 +100,38 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     options.server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
       void this.handleUpgrade(req, socket, head);
     });
+  }
+
+  // Overridden (rather than relying on the inherited EventEmitter methods,
+  // as every other event still does) only to wrap listeners for SAFE_EVENTS
+  // — see the comment on that constant. Node's own once()/removeListener
+  // machinery is untouched: we wrap the listener function itself before
+  // handing it to super.on()/super.once(), so native once-after-first-call
+  // semantics still apply to our wrapper, not to the caller's function.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.on(event, SAFE_EVENTS.has(event as string) ? this.wrapListener(listener) : listener);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  once(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.once(event, SAFE_EVENTS.has(event as string) ? this.wrapListener(listener) : listener);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private wrapListener(listener: (...args: any[]) => void): (...args: any[]) => void {
+    return (...args: any[]) => {
+      let result: unknown;
+      try {
+        result = listener(...args);
+      } catch (error) {
+        this.emitError(error);
+        return;
+      }
+      if (result instanceof Promise) {
+        result.catch((error: unknown) => this.emitError(error));
+      }
+    };
   }
 
   private async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {

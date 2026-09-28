@@ -275,4 +275,29 @@ describe('createNetiflyPublisher', () => {
     });
     expect(typeof info.id).toBe('string');
   });
+
+  it('isolates a throwing "sent" listener: send() still resolves and publishes', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    publisher.on('sent', () => {
+      throw new Error('boom-publisher-sent');
+    });
+
+    const result = await publisher.send('netiflyPublisher-sent-throws', { ok: true });
+    expect(result).toEqual({ delivered: false, instances: 0 });
+  });
+
+  it('a "once" listener on "sent" still fires exactly once despite the safety wrapper', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    const calls: unknown[] = [];
+    publisher.once('sent', (info) => calls.push(info));
+
+    await publisher.send('netiflyPublisher-once-still-once', { a: 1 });
+    await publisher.send('netiflyPublisher-once-still-once', { b: 2 });
+
+    expect(calls).toHaveLength(1);
+  });
 });
