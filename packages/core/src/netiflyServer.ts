@@ -2,19 +2,24 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
+import type { RawData } from 'ws';
 import { monotonicFactory } from 'ulid';
 import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
+import { parseInboundFrame } from './inboundFrame';
 import { ENVELOPE_VERSION } from './types';
 import type {
+  AckInfo,
   AllowedOrigins,
   CloseOptions,
   CreateNetiflyOptions,
   Envelope,
   EventMap,
+  MalformedFrameInfo,
   NetiflyInstance,
   RejectInfo,
+  ResponseInfo,
   SendOrOptions,
   SendResult,
   UserId,
@@ -182,6 +187,29 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     subscribed = true;
     this.registry.add(userId, ws);
     this.emit('connect', userId);
+    ws.on('message', (data) => this.handleInboundFrame(userId, data));
+  }
+
+  private handleInboundFrame(userId: UserId, data: RawData): void {
+    const parsed = parseInboundFrame(data.toString());
+    if (!parsed.ok) {
+      this.emitMalformedFrame({ userId, reason: parsed.reason });
+      return;
+    }
+
+    const ts = Date.now();
+    const frame = parsed.frame;
+    if (frame.type === 'ack') {
+      this.emit('delivered', { userId, id: frame.id, ts } satisfies AckInfo);
+    } else if (frame.type === 'read') {
+      this.emit('read', { userId, id: frame.id, ts } satisfies AckInfo);
+    } else {
+      this.emit('response', { userId, id: frame.id, payload: frame.payload, ts } satisfies ResponseInfo);
+    }
+  }
+
+  private emitMalformedFrame(info: MalformedFrameInfo): void {
+    this.emit('malformedFrame', info);
   }
 
   private isOriginAllowed(origin: string | undefined, req: IncomingMessage): boolean {

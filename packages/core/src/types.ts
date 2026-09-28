@@ -118,6 +118,26 @@ export interface DroppedInfo {
   reason: 'maxBufferedBytes';
 }
 
+export interface AckInfo {
+  userId: UserId;
+  id: string;
+  ts: number;
+}
+
+export interface ResponseInfo {
+  userId: UserId;
+  id: string;
+  payload: unknown;
+  ts: number;
+}
+
+export type MalformedFrameReason = 'invalidJson' | 'invalidShape' | 'rateLimited';
+
+export interface MalformedFrameInfo {
+  userId: UserId;
+  reason: MalformedFrameReason;
+}
+
 export interface CloseOptions {
   /**
    * Milliseconds to wait for clients to acknowledge a graceful close (code
@@ -171,10 +191,16 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   on(event: 'error', listener: (error: Error) => void): this;
   on(event: 'reject', listener: (info: RejectInfo) => void): this;
   on(event: 'dropped', listener: (info: DroppedInfo) => void): this;
+  on(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
+  on(event: 'response', listener: (info: ResponseInfo) => void): this;
+  on(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
   once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
   once(event: 'reject', listener: (info: RejectInfo) => void): this;
   once(event: 'dropped', listener: (info: DroppedInfo) => void): this;
+  once(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
+  once(event: 'response', listener: (info: ResponseInfo) => void): this;
+  once(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
   close(options?: CloseOptions): Promise<void>;
   /**
    * Whether `userId` has a live connection anywhere in the cluster, derived

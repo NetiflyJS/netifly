@@ -100,6 +100,15 @@ function onceEvent(emitter: NetiflyInstance, event: 'connect'): Promise<void> {
   return new Promise((resolve) => emitter.once(event, () => resolve()));
 }
 
+// Generic counterpart to onceEvent() above, for the new events that carry a
+// payload ('delivered' | 'read' | 'response' | 'malformedFrame' | 'sent').
+// `once` is overloaded per event name, so its type can't express "some event,
+// generic payload" — cast it to a simpler shape for this generic helper.
+function onceInfo<T>(emitter: NetiflyInstance, event: string): Promise<T> {
+  const once = emitter.once as unknown as (event: string, listener: (info: T) => void) => NetiflyInstance;
+  return new Promise((resolve) => once.call(emitter, event, (info: T) => resolve(info)));
+}
+
 describe('createNetifly', () => {
   const servers: TestServer[] = [];
   const clients: WebSocket[] = [];
@@ -1031,5 +1040,121 @@ describe('createNetifly', () => {
     );
     expect(sendOrResult).toEqual({ delivered: false, instances: 0 });
     expect(offline).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits "delivered" when a client sends an ack frame', async () => {
+    const server = await startTestServer(() => 'netiflyServer-ack');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const deliveredPromise = onceInfo<{ userId: string; id: string; ts: number }>(
+      server.netifly,
+      'delivered'
+    );
+    client.send(JSON.stringify({ type: 'ack', id: 'notif-1' }));
+
+    const info = await deliveredPromise;
+    expect(info.userId).toBe('netiflyServer-ack');
+    expect(info.id).toBe('notif-1');
+    expect(typeof info.ts).toBe('number');
+  });
+
+  it('emits "read" when a client sends a read frame', async () => {
+    const server = await startTestServer(() => 'netiflyServer-read');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const readPromise = onceInfo<{ userId: string; id: string; ts: number }>(server.netifly, 'read');
+    client.send(JSON.stringify({ type: 'read', id: 'notif-2' }));
+
+    const info = await readPromise;
+    expect(info).toMatchObject({ userId: 'netiflyServer-read', id: 'notif-2' });
+  });
+
+  it('emits "response" with the client-supplied payload', async () => {
+    const server = await startTestServer(() => 'netiflyServer-response');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const responsePromise = onceInfo<{ userId: string; id: string; payload: unknown; ts: number }>(
+      server.netifly,
+      'response'
+    );
+    client.send(JSON.stringify({ type: 'response', id: 'notif-3', payload: { choice: 'accept' } }));
+
+    const info = await responsePromise;
+    expect(info).toMatchObject({
+      userId: 'netiflyServer-response',
+      id: 'notif-3',
+      payload: { choice: 'accept' },
+    });
+  });
+
+  it('drops invalid JSON and emits "malformedFrame" with reason "invalidJson"', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-json');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const malformedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send('not json');
+
+    const info = await malformedPromise;
+    expect(info).toEqual({ userId: 'netiflyServer-malformed-json', reason: 'invalidJson' });
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('drops a binary frame as malformed instead of crashing the connection', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-binary');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const malformedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send(Buffer.from([0x00, 0x01, 0x02, 0xff]));
+
+    const info = await malformedPromise;
+    expect(info.userId).toBe('netiflyServer-malformed-binary');
+    expect(['invalidJson', 'invalidShape']).toContain(info.reason);
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('drops a wrong-shape frame and keeps the connection working normally', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-shape');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const malformedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send(JSON.stringify({ type: 'unknown-kind', id: 'x' }));
+
+    const info = await malformedPromise;
+    expect(info).toEqual({ userId: 'netiflyServer-malformed-shape', reason: 'invalidShape' });
+
+    const messagePromise = nextMessage(client);
+    await server.netifly.send('netiflyServer-malformed-shape', { ok: true });
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ ok: true });
   });
 });
