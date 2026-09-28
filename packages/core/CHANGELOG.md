@@ -1,3 +1,22 @@
+# [@netiflyjs/core-v1.11.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.10.1...@netiflyjs/core-v1.11.0) (2026-09-28)
+
+
+### Bug Fixes
+
+* **core:** isolate throwing/rejecting listeners on new NOT-30 events ([bd4fbb5](https://github.com/NetiflyJS/netifly/commit/bd4fbb53b32a1f36f2c57d96d3c9280aff782e26))
+* **core:** satisfy eslint no-explicit-any in wrapListener's inner closure ([e533ccd](https://github.com/NetiflyJS/netifly/commit/e533ccdeb5a4c61859764eda22860c645d022f7a))
+
+
+### Features
+
+* **core:** add inbound client frame parser for ack/read/response (NOT-30) ([57f0eab](https://github.com/NetiflyJS/netifly/commit/57f0eabb77ed168e78e74f606edb3bca3f8156b9))
+* **core:** add per-connection token bucket rate limiter (NOT-30) ([213fc21](https://github.com/NetiflyJS/netifly/commit/213fc21900ef2f7c374faa436c00247dda99e6de))
+* **core:** emit 'sent' from NetiflyPublisher.send() (NOT-30) ([f43890a](https://github.com/NetiflyJS/netifly/commit/f43890a68600f2b2cf88f6d4d02c08bbfb271b4c))
+* **core:** emit 'sent' from send()/sendOr() for send-time persistence (NOT-30) ([ec718f3](https://github.com/NetiflyJS/netifly/commit/ec718f31593fe1755af138c6dbe697417c8a36bf))
+* **core:** emit delivered/read/response/malformedFrame from inbound frames (NOT-30) ([dcbb5cf](https://github.com/NetiflyJS/netifly/commit/dcbb5cf185abd12c6201d1f17b98b84bf5348ba3))
+* **core:** rate-limit inbound client frames per connection (NOT-30) ([1474c19](https://github.com/NetiflyJS/netifly/commit/1474c19b8ee60b006bc2ac5fb0cc07a68eabf326))
+* **core:** relay ack/read/response to a user's other connections (NOT-30) ([f882909](https://github.com/NetiflyJS/netifly/commit/f882909737dc0681b4f6511e38a9fe7e0a955d6a))
+
 # [@netiflyjs/core-v1.10.1](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.10.0...@netiflyjs/core-v1.10.1) (2026-09-27)
 
 
