@@ -88,6 +88,28 @@ function nextMessage(ws: WebSocket): Promise<string> {
   });
 }
 
+// Resolves with the first message matching `predicate`, ignoring any others
+// (e.g. netifly.ack/read/response relay echoes) received in the meantime.
+// Uses one persistent listener rather than sequential nextMessage() calls:
+// once()-based re-subscription can miss a second 'message' event that fires
+// synchronously before the loop re-attaches, when two server messages arrive
+// in the same parse burst.
+function nextMatchingMessage(
+  ws: WebSocket,
+  predicate: (envelope: { type: string; data: unknown }) => boolean
+): Promise<{ type: string; data: unknown }> {
+  return new Promise((resolve) => {
+    const handler = (data: WebSocket.RawData) => {
+      const envelope = JSON.parse(data.toString());
+      if (predicate(envelope)) {
+        ws.off('message', handler);
+        resolve(envelope);
+      }
+    };
+    ws.on('message', handler);
+  });
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -98,6 +120,15 @@ function wait(ms: number): Promise<void> {
 // a test needs to know the initial Redis SUBSCRIBE has been acknowledged.
 function onceEvent(emitter: NetiflyInstance, event: 'connect'): Promise<void> {
   return new Promise((resolve) => emitter.once(event, () => resolve()));
+}
+
+// Generic counterpart to onceEvent() above, for the new events that carry a
+// payload ('delivered' | 'read' | 'response' | 'malformedFrame' | 'sent').
+// `once` is overloaded per event name, so its type can't express "some event,
+// generic payload" — cast it to a simpler shape for this generic helper.
+function onceInfo<T>(emitter: NetiflyInstance, event: string): Promise<T> {
+  const once = emitter.once as unknown as (event: string, listener: (info: T) => void) => NetiflyInstance;
+  return new Promise((resolve) => once.call(emitter, event, (info: T) => resolve(info)));
 }
 
 describe('createNetifly', () => {
@@ -1031,5 +1062,377 @@ describe('createNetifly', () => {
     );
     expect(sendOrResult).toEqual({ delivered: false, instances: 0 });
     expect(offline).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits "delivered" when a client sends an ack frame', async () => {
+    const server = await startTestServer(() => 'netiflyServer-ack');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const deliveredPromise = onceInfo<{ userId: string; id: string; ts: number }>(
+      server.netifly,
+      'delivered'
+    );
+    client.send(JSON.stringify({ type: 'ack', id: 'notif-1' }));
+
+    const info = await deliveredPromise;
+    expect(info.userId).toBe('netiflyServer-ack');
+    expect(info.id).toBe('notif-1');
+    expect(typeof info.ts).toBe('number');
+  });
+
+  it('emits "read" when a client sends a read frame', async () => {
+    const server = await startTestServer(() => 'netiflyServer-read');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const readPromise = onceInfo<{ userId: string; id: string; ts: number }>(server.netifly, 'read');
+    client.send(JSON.stringify({ type: 'read', id: 'notif-2' }));
+
+    const info = await readPromise;
+    expect(info).toMatchObject({ userId: 'netiflyServer-read', id: 'notif-2' });
+  });
+
+  it('emits "response" with the client-supplied payload', async () => {
+    const server = await startTestServer(() => 'netiflyServer-response');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const responsePromise = onceInfo<{ userId: string; id: string; payload: unknown; ts: number }>(
+      server.netifly,
+      'response'
+    );
+    client.send(JSON.stringify({ type: 'response', id: 'notif-3', payload: { choice: 'accept' } }));
+
+    const info = await responsePromise;
+    expect(info).toMatchObject({
+      userId: 'netiflyServer-response',
+      id: 'notif-3',
+      payload: { choice: 'accept' },
+    });
+  });
+
+  it('drops invalid JSON and emits "malformedFrame" with reason "invalidJson"', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-json');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const malformedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send('not json');
+
+    const info = await malformedPromise;
+    expect(info).toEqual({ userId: 'netiflyServer-malformed-json', reason: 'invalidJson' });
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('drops a binary frame as malformed instead of crashing the connection', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-binary');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const malformedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send(Buffer.from([0x00, 0x01, 0x02, 0xff]));
+
+    const info = await malformedPromise;
+    expect(info.userId).toBe('netiflyServer-malformed-binary');
+    expect(['invalidJson', 'invalidShape']).toContain(info.reason);
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('drops a wrong-shape frame and keeps the connection working normally', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-shape');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const malformedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send(JSON.stringify({ type: 'unknown-kind', id: 'x' }));
+
+    const info = await malformedPromise;
+    expect(info).toEqual({ userId: 'netiflyServer-malformed-shape', reason: 'invalidShape' });
+
+    const messagePromise = nextMessage(client);
+    await server.netifly.send('netiflyServer-malformed-shape', { ok: true });
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ ok: true });
+  });
+
+  it('shares the inbound rate-limit budget across ack/read/response frame kinds', async () => {
+    const server = await startTestServer(() => 'netiflyServer-rate-limited-mixed', {
+      maxInboundFramesPerSecond: 2,
+    });
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const rateLimitedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send(JSON.stringify({ type: 'ack', id: 'a' }));
+    client.send(JSON.stringify({ type: 'read', id: 'b' }));
+    client.send(JSON.stringify({ type: 'response', id: 'c', payload: {} }));
+
+    const info = await rateLimitedPromise;
+    expect(info).toEqual({ userId: 'netiflyServer-rate-limited-mixed', reason: 'rateLimited' });
+
+    // The connection itself survives being rate-limited — it isn't closed,
+    // and normal server → client delivery keeps working on it afterward.
+    // The two accepted frames above ('a', 'b') also produce their own
+    // netifly.ack/netifly.read relay echoes on this same socket, so match on
+    // envelope type rather than assuming the very next message is this one.
+    expect(client.readyState).toBe(WebSocket.OPEN);
+    const messagePromise = nextMatchingMessage(client, (envelope) => envelope.type === 'message');
+    await server.netifly.send('netiflyServer-rate-limited-mixed', { ok: true });
+    const envelope = await messagePromise;
+    expect(envelope.data).toEqual({ ok: true });
+  });
+
+  it("relays a delivered ack to the user's other open connections, including the sender", async () => {
+    const server = await startTestServer(() => 'netiflyServer-relay-ack');
+    servers.push(server);
+
+    const firstConnectedPromise = onceEvent(server.netifly, 'connect');
+    const senderClient = await connectClient(server.port);
+    clients.push(senderClient);
+    await firstConnectedPromise;
+
+    const secondConnectedPromise = onceEvent(server.netifly, 'connect');
+    const otherTabClient = await connectClient(server.port);
+    clients.push(otherTabClient);
+    await secondConnectedPromise;
+
+    const senderRelayPromise = nextMessage(senderClient);
+    const otherTabRelayPromise = nextMessage(otherTabClient);
+    senderClient.send(JSON.stringify({ type: 'ack', id: 'notif-relay-1' }));
+
+    const senderRelay = JSON.parse(await senderRelayPromise);
+    const otherTabRelay = JSON.parse(await otherTabRelayPromise);
+    expect(senderRelay).toMatchObject({ type: 'netifly.ack', data: { id: 'notif-relay-1' } });
+    expect(otherTabRelay).toMatchObject({ type: 'netifly.ack', data: { id: 'notif-relay-1' } });
+  });
+
+  it('relays a read receipt across two server instances via Redis, firing "read" exactly once — never once per instance', async () => {
+    const serverA = await startTestServer(() => 'netiflyServer-relay-cross-instance');
+    const serverB = await startTestServer(() => 'netiflyServer-relay-cross-instance');
+    servers.push(serverA, serverB);
+
+    const readsOnA: unknown[] = [];
+    const readsOnB: unknown[] = [];
+    serverA.netifly.on('read', (info) => readsOnA.push(info));
+    serverB.netifly.on('read', (info) => readsOnB.push(info));
+
+    const connectedOnA = onceEvent(serverA.netifly, 'connect');
+    const clientOnA = await connectClient(serverA.port);
+    clients.push(clientOnA);
+    await connectedOnA;
+
+    const connectedOnB = onceEvent(serverB.netifly, 'connect');
+    const clientOnB = await connectClient(serverB.port);
+    clients.push(clientOnB);
+    await connectedOnB;
+
+    const relayOnB = nextMessage(clientOnB);
+    clientOnA.send(JSON.stringify({ type: 'read', id: 'notif-relay-2' }));
+
+    const envelope = JSON.parse(await relayOnB);
+    expect(envelope).toMatchObject({ type: 'netifly.read', data: { id: 'notif-relay-2' } });
+
+    // The relay reaching B must not make B re-fire the hook — the hook is
+    // exactly-once, tied to whichever instance the client frame physically
+    // arrived at (A), never to how many instances the relay fans out to.
+    await wait(50);
+    expect(readsOnA).toHaveLength(1);
+    expect(readsOnB).toHaveLength(0);
+  });
+
+  it('relays a response with its payload to other connections', async () => {
+    const server = await startTestServer(() => 'netiflyServer-relay-response');
+    servers.push(server);
+
+    const firstConnectedPromise = onceEvent(server.netifly, 'connect');
+    const clientA = await connectClient(server.port);
+    clients.push(clientA);
+    await firstConnectedPromise;
+
+    const secondConnectedPromise = onceEvent(server.netifly, 'connect');
+    const clientB = await connectClient(server.port);
+    clients.push(clientB);
+    await secondConnectedPromise;
+
+    const relayOnB = nextMessage(clientB);
+    clientA.send(JSON.stringify({ type: 'response', id: 'notif-relay-3', payload: { choice: 'decline' } }));
+
+    const envelope = JSON.parse(await relayOnB);
+    expect(envelope).toMatchObject({
+      type: 'netifly.response',
+      data: { id: 'notif-relay-3', payload: { choice: 'decline' } },
+    });
+  });
+
+  it('emits "sent" synchronously with the generated envelope id before publishing', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sent-hook');
+    servers.push(server);
+
+    const sentPromise = onceInfo<{ userId: string; id: string; type: string; data: unknown }>(
+      server.netifly,
+      'sent'
+    );
+    const resultPromise = server.netifly.send('netiflyServer-sent-hook', 'export.ready', { url: 'x' });
+
+    const info = await sentPromise;
+    expect(info).toMatchObject({
+      userId: 'netiflyServer-sent-hook',
+      type: 'export.ready',
+      data: { url: 'x' },
+    });
+    expect(typeof info.id).toBe('string');
+    await resultPromise;
+  });
+
+  it('emits "sent" for sendOr() as well as send()', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sent-hook-sendor');
+    servers.push(server);
+
+    const sentPromise = onceInfo<{ userId: string; id: string }>(server.netifly, 'sent');
+    await server.netifly.sendOr('netiflyServer-sent-hook-sendor', { hi: true }, { offline: () => {} });
+
+    const info = await sentPromise;
+    expect(info.userId).toBe('netiflyServer-sent-hook-sendor');
+  });
+
+  it('isolates a throwing "sent" listener: send() still resolves and publishes, and "error" fires', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sent-throws');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('sent', () => {
+      throw new Error('boom-sent');
+    });
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const messagePromise = nextMessage(client);
+    const result = await server.netifly.send('netiflyServer-sent-throws', { ok: true });
+
+    expect(result.delivered).toBe(true);
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ ok: true });
+    expect(errors.map((e) => e.message)).toContain('boom-sent');
+  });
+
+  it('isolates a throwing "delivered" listener from crashing and from other listeners', async () => {
+    const server = await startTestServer(() => 'netiflyServer-delivered-throws');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    const secondListenerCalls: unknown[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('delivered', () => {
+      throw new Error('boom-delivered');
+    });
+    server.netifly.on('delivered', (info) => secondListenerCalls.push(info));
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send(JSON.stringify({ type: 'ack', id: 'x' }));
+    await wait(100);
+
+    expect(errors.map((e) => e.message)).toContain('boom-delivered');
+    expect(secondListenerCalls).toHaveLength(1);
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('isolates an async-rejecting "malformedFrame" listener', async () => {
+    const server = await startTestServer(() => 'netiflyServer-malformed-rejects');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('malformedFrame', async () => {
+      throw new Error('boom-malformed-async');
+    });
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send('not json');
+    await wait(100);
+
+    expect(errors.map((e) => e.message)).toContain('boom-malformed-async');
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('isolates a throwing "response" listener', async () => {
+    const server = await startTestServer(() => 'netiflyServer-response-throws');
+    servers.push(server);
+
+    const errors: Error[] = [];
+    server.netifly.on('error', (e) => errors.push(e));
+    server.netifly.on('response', () => {
+      throw new Error('boom-response');
+    });
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send(JSON.stringify({ type: 'response', id: 'x', payload: {} }));
+    await wait(100);
+
+    expect(errors.map((e) => e.message)).toContain('boom-response');
+    expect(client.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('a "once" listener on a new event still fires exactly once despite the safety wrapper', async () => {
+    const server = await startTestServer(() => 'netiflyServer-once-still-once');
+    servers.push(server);
+
+    const calls: unknown[] = [];
+    server.netifly.once('delivered', (info) => calls.push(info));
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    client.send(JSON.stringify({ type: 'ack', id: 'first' }));
+    client.send(JSON.stringify({ type: 'ack', id: 'second' }));
+    await wait(100);
+
+    expect(calls).toHaveLength(1);
   });
 });

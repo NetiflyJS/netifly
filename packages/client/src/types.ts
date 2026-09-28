@@ -92,4 +92,11 @@ export interface NetiflyClientOptions {
    * for a long-lived app that should recover from an outage of any length.
    */
   maxReconnectAttempts?: number;
+  /**
+   * Auto-sends `{ type: 'ack', id }` back to the server on receipt of every
+   * application envelope (never for the server's own `netifly.*` relay
+   * frames). Defaults to `true`. Set `false` if your app doesn't want the
+   * extra outbound traffic, or wants to ack explicitly on its own schedule.
+   */
+  autoAck?: boolean;
 }

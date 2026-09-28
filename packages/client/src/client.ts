@@ -58,6 +58,7 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
   private readonly maxReconnectAttempts: number;
+  private readonly autoAck: boolean;
 
   private readonly handlers = new Map<string, Set<MessageHandler>>();
   private readonly anyHandlers = new Set<(envelope: Envelope) => void>();
@@ -89,6 +90,7 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     this.baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
     this.maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? Infinity;
+    this.autoAck = options.autoAck ?? true;
   }
 
   /** Current connection state. Also observable via `onStateChange()`. */
@@ -190,6 +192,29 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
    */
   onError(handler: (error: Error) => void): Unsubscribe {
     return this.subscribe(this.errorHandlers, handler);
+  }
+
+  /** Sends `{ type: 'read', id }`. No-op if not connected. */
+  markRead(id: string): void {
+    this.sendFrame({ type: 'read', id });
+  }
+
+  /** Sends `{ type: 'response', id, payload }`. No-op if not connected. */
+  respond(id: string, payload: unknown): void {
+    this.sendFrame({ type: 'response', id, payload });
+  }
+
+  private sendFrame(
+    frame: { type: 'ack' | 'read'; id: string } | { type: 'response'; id: string; payload: unknown }
+  ): void {
+    if (!this.socket || this.currentState !== 'open') {
+      return;
+    }
+    try {
+      this.socket.send(JSON.stringify(frame));
+    } catch (error) {
+      this.emitError(toError(error));
+    }
   }
 
   private subscribe<T>(set: Set<T>, handler: T): Unsubscribe {
@@ -366,7 +391,7 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     if (envelope === null || typeof envelope !== 'object' || typeof envelope.type !== 'string') {
       return;
     }
-    if (typeof envelope.id === 'string') {
+    if (typeof envelope.id === 'string' && !envelope.type.startsWith('netifly.')) {
       this.currentEventId = envelope.id;
     }
 
@@ -378,6 +403,10 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     }
     for (const handler of [...this.anyHandlers]) {
       this.safely(() => handler(envelope));
+    }
+
+    if (this.autoAck && typeof envelope.id === 'string' && !envelope.type.startsWith('netifly.')) {
+      this.sendFrame({ type: 'ack', id: envelope.id });
     }
   }
 
