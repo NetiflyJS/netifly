@@ -1235,10 +1235,15 @@ describe('createNetifly', () => {
     expect(otherTabRelay).toMatchObject({ type: 'netifly.ack', data: { id: 'notif-relay-1' } });
   });
 
-  it('relays a read receipt across two server instances via Redis', async () => {
+  it('relays a read receipt across two server instances via Redis, firing "read" exactly once — never once per instance', async () => {
     const serverA = await startTestServer(() => 'netiflyServer-relay-cross-instance');
     const serverB = await startTestServer(() => 'netiflyServer-relay-cross-instance');
     servers.push(serverA, serverB);
+
+    const readsOnA: unknown[] = [];
+    const readsOnB: unknown[] = [];
+    serverA.netifly.on('read', (info) => readsOnA.push(info));
+    serverB.netifly.on('read', (info) => readsOnB.push(info));
 
     const connectedOnA = onceEvent(serverA.netifly, 'connect');
     const clientOnA = await connectClient(serverA.port);
@@ -1255,6 +1260,13 @@ describe('createNetifly', () => {
 
     const envelope = JSON.parse(await relayOnB);
     expect(envelope).toMatchObject({ type: 'netifly.read', data: { id: 'notif-relay-2' } });
+
+    // The relay reaching B must not make B re-fire the hook — the hook is
+    // exactly-once, tied to whichever instance the client frame physically
+    // arrived at (A), never to how many instances the relay fans out to.
+    await wait(50);
+    expect(readsOnA).toHaveLength(1);
+    expect(readsOnB).toHaveLength(0);
   });
 
   it('relays a response with its payload to other connections', async () => {
