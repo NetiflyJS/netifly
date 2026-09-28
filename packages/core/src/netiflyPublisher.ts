@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import Redis from 'ioredis';
 import { monotonicFactory } from 'ulid';
 import { disconnectRedis } from './redisDisconnect';
@@ -9,10 +10,14 @@ import type {
   EventMap,
   NetiflyPublisher,
   SendResult,
+  SentInfo,
   UserId,
 } from './types';
 
-class NetiflyPublisherImpl<Events extends EventMap = EventMap> implements NetiflyPublisher<Events> {
+class NetiflyPublisherImpl<Events extends EventMap = EventMap>
+  extends EventEmitter
+  implements NetiflyPublisher<Events>
+{
   private readonly redis: Redis;
   private readonly namespace: string | undefined;
   private readonly validate: CreateNetiflyPublisherOptions<Events>['validate'];
@@ -20,6 +25,7 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap> implements Netifl
   private closed = false;
 
   constructor(options: CreateNetiflyPublisherOptions<Events>) {
+    super();
     this.namespace = options.namespace;
     this.validate = options.validate;
 
@@ -66,6 +72,12 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap> implements Netifl
     // this cast is needed at the call site.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
     const envelope = this.buildEnvelope(type, data);
+    this.emit('sent', {
+      userId,
+      id: envelope.id,
+      type: envelope.type,
+      data: envelope.data,
+    } satisfies SentInfo);
 
     let serialized: string;
     try {

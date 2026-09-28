@@ -257,4 +257,22 @@ describe('createNetiflyPublisher', () => {
 
     expect((publisher as unknown as { redis: Redis }).redis.status).toBe('end');
   });
+
+  it('emits "sent" synchronously with the generated id before publishing', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    const sentPromise = new Promise<{ userId: string; id: string; type: string; data: unknown }>(
+      (resolve) => publisher.once('sent', (info) => resolve(info))
+    );
+    await publisher.send('netiflyPublisher-sent-hook', 'export.ready', { url: 'x' });
+
+    const info = await sentPromise;
+    expect(info).toMatchObject({
+      userId: 'netiflyPublisher-sent-hook',
+      type: 'export.ready',
+      data: { url: 'x' },
+    });
+    expect(typeof info.id).toBe('string');
+  });
 });
