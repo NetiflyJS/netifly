@@ -121,6 +121,37 @@ token refresh (`getToken` is called again before every attempt) for you —
 see the [`client` reference](reference/client.md) for the full reconnect
 behavior table.
 
+## Acks and read state
+
+The client acknowledges every received notification automatically
+(`autoAck`, on by default) and can mark one read on user action:
+
+```ts
+client.on('comment.created', (data, envelope) => {
+  addCommentToUi(data, {
+    onOpen: () => client.markRead(envelope.id), // e.g. wired to a "mark read" button
+  });
+});
+```
+
+On the server, persist delivery/read state — and, at send time, the
+notification itself — with the matching hooks:
+
+```ts
+netifly.on('sent', ({ id, userId, type, data }) => {
+  db.notifications.insert({ id, userId, type, data, status: 'sent' });
+});
+netifly.on('delivered', ({ id }) => db.notifications.update(id, { status: 'delivered' }));
+netifly.on('read', ({ id }) => db.notifications.update(id, { status: 'read' }));
+```
+
+`respond(id, payload)` sends an arbitrary JSON payload back (e.g. a CTA
+button reply), firing `'response'` on the server the same way. See
+[Frontend hooks](reference/client.md#frontend-hooks) and
+[Backend hooks](reference/core.md#backend-hooks) for the full event/method
+list, including `'malformedFrame'` and the `netifly.*` reserved type
+prefix used for multi-tab/device sync.
+
 ## Typed events
 
 Give `createNetifly()` an `Events` map — event name → payload shape — and
