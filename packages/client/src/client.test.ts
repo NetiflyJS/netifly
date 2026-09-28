@@ -172,7 +172,9 @@ describe('NetiflyClient', () => {
 
     it('only dispatches to handlers for the matching event type, and onAny sees everything', async () => {
       const server = track(await startServer());
-      const client = makeClient(server.port);
+      // autoAck: false — this test asserts onAny() sees exactly what it sent
+      // itself; auto-ack's netifly.ack self-echo is unrelated noise here.
+      const client = makeClient(server.port, { autoAck: false });
       const exports_: unknown[] = [];
       const comments: unknown[] = [];
       const all: string[] = [];
@@ -499,6 +501,119 @@ describe('NetiflyClient', () => {
 
       expect(seen).toEqual([{ url: 'https://example.com/a.zip' }]);
       expect(errors.map((e) => e.message)).toContain('handler blew up');
+    });
+  });
+
+  describe('acks and read state', () => {
+    it('auto-acks a received application envelope by default', async () => {
+      const server = track(await startServer());
+      const client = makeClient(server.port);
+
+      const deliveredPromise = new Promise<{ userId: string; id: string; ts: number }>((resolve) =>
+        server.netifly.once('delivered', (info) => resolve(info))
+      );
+
+      client.connect();
+      await nextState(client, 'open');
+
+      const received = nextEvent(client, 'export.ready');
+      await server.netifly.send('alice', 'export.ready', { url: 'https://x' });
+      const { envelope } = await received;
+
+      const info = await deliveredPromise;
+      expect(info.userId).toBe('alice');
+      expect(info.id).toBe(envelope.id);
+      expect(typeof info.ts).toBe('number');
+    });
+
+    it('does not auto-ack when autoAck is false', async () => {
+      const server = track(await startServer());
+      const client = makeClient(server.port, { autoAck: false });
+
+      const deliveredCalls: unknown[] = [];
+      server.netifly.on('delivered', (info) => deliveredCalls.push(info));
+
+      client.connect();
+      await nextState(client, 'open');
+
+      const received = nextEvent(client, 'export.ready');
+      await server.netifly.send('alice', 'export.ready', { url: 'https://x' });
+      await received;
+      await wait(200);
+
+      expect(deliveredCalls).toEqual([]);
+    });
+
+    it('markRead() sends a read frame for the given id', async () => {
+      const server = track(await startServer());
+      const client = makeClient(server.port);
+
+      const readPromise = new Promise<{ userId: string; id: string }>((resolve) =>
+        server.netifly.once('read', (info) => resolve(info))
+      );
+
+      client.connect();
+      await nextState(client, 'open');
+      client.markRead('notif-42');
+
+      const info = await readPromise;
+      expect(info.userId).toBe('alice');
+      expect(info.id).toBe('notif-42');
+    });
+
+    it('respond() sends a response frame with the given payload', async () => {
+      const server = track(await startServer());
+      const client = makeClient(server.port);
+
+      const responsePromise = new Promise<{ userId: string; id: string; payload: unknown }>((resolve) =>
+        server.netifly.once('response', (info) => resolve(info))
+      );
+
+      client.connect();
+      await nextState(client, 'open');
+      client.respond('notif-43', { choice: 'accept' });
+
+      const info = await responsePromise;
+      expect(info.userId).toBe('alice');
+      expect(info.id).toBe('notif-43');
+      expect(info.payload).toEqual({ choice: 'accept' });
+    });
+
+    it('markRead() and respond() no-op when not connected', () => {
+      const client = createNetiflyClient<Events>({ url: 'ws://127.0.0.1:1/netifly' });
+      clients.push(client);
+      expect(() => client.markRead('x')).not.toThrow();
+      expect(() => client.respond('x', { a: 1 })).not.toThrow();
+    });
+
+    it("does not auto-ack the server's own netifly.* relay frames", async () => {
+      const server = track(await startServer());
+      const clientA = makeClient(server.port);
+      const clientB = makeClient(server.port);
+
+      const deliveredCalls: unknown[] = [];
+      server.netifly.on('delivered', (info) => deliveredCalls.push(info));
+
+      clientA.connect();
+      await nextState(clientA, 'open');
+      clientB.connect();
+      await nextState(clientB, 'open');
+
+      const relayOnB = new Promise<Envelope>((resolve) => {
+        const off = clientB.onAny((envelope) => {
+          if (envelope.type === 'netifly.read') {
+            off();
+            resolve(envelope);
+          }
+        });
+      });
+
+      clientA.markRead('notif-auto-ack-skip');
+      const relay = await relayOnB;
+      expect(relay.data).toEqual({ id: 'notif-auto-ack-skip' });
+
+      await wait(200);
+      expect(deliveredCalls).toEqual([]);
     });
   });
 });
