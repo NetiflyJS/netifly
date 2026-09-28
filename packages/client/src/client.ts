@@ -391,7 +391,7 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     if (envelope === null || typeof envelope !== 'object' || typeof envelope.type !== 'string') {
       return;
     }
-    if (typeof envelope.id === 'string') {
+    if (typeof envelope.id === 'string' && !envelope.type.startsWith('netifly.')) {
       this.currentEventId = envelope.id;
     }
 

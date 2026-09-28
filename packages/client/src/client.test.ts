@@ -615,5 +615,23 @@ describe('NetiflyClient', () => {
       await wait(200);
       expect(deliveredCalls).toEqual([]);
     });
+
+    it("does not let the server's own netifly.* relay echo overwrite lastEventId", async () => {
+      const server = track(await startServer());
+      const client = makeClient(server.port);
+
+      client.connect();
+      await nextState(client, 'open');
+
+      const received = nextEvent(client, 'export.ready');
+      await server.netifly.send('alice', 'export.ready', { url: 'https://x' });
+      const { envelope } = await received;
+
+      // Give the auto-ack's netifly.ack relay time to round-trip back to
+      // this same client (it always does — see the relay-echo test above).
+      await wait(200);
+
+      expect(client.lastEventId).toBe(envelope.id);
+    });
   });
 });
