@@ -88,6 +88,28 @@ function nextMessage(ws: WebSocket): Promise<string> {
   });
 }
 
+// Resolves with the first message matching `predicate`, ignoring any others
+// (e.g. netifly.ack/read/response relay echoes) received in the meantime.
+// Uses one persistent listener rather than sequential nextMessage() calls:
+// once()-based re-subscription can miss a second 'message' event that fires
+// synchronously before the loop re-attaches, when two server messages arrive
+// in the same parse burst.
+function nextMatchingMessage(
+  ws: WebSocket,
+  predicate: (envelope: { type: string; data: unknown }) => boolean
+): Promise<{ type: string; data: unknown }> {
+  return new Promise((resolve) => {
+    const handler = (data: WebSocket.RawData) => {
+      const envelope = JSON.parse(data.toString());
+      if (predicate(envelope)) {
+        ws.off('message', handler);
+        resolve(envelope);
+      }
+    };
+    ws.on('message', handler);
+  });
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1179,10 +1201,83 @@ describe('createNetifly', () => {
 
     // The connection itself survives being rate-limited — it isn't closed,
     // and normal server → client delivery keeps working on it afterward.
+    // The two accepted frames above ('a', 'b') also produce their own
+    // netifly.ack/netifly.read relay echoes on this same socket, so match on
+    // envelope type rather than assuming the very next message is this one.
     expect(client.readyState).toBe(WebSocket.OPEN);
-    const messagePromise = nextMessage(client);
+    const messagePromise = nextMatchingMessage(client, (envelope) => envelope.type === 'message');
     await server.netifly.send('netiflyServer-rate-limited-mixed', { ok: true });
-    const envelope = JSON.parse(await messagePromise);
+    const envelope = await messagePromise;
     expect(envelope.data).toEqual({ ok: true });
+  });
+
+  it("relays a delivered ack to the user's other open connections, including the sender", async () => {
+    const server = await startTestServer(() => 'netiflyServer-relay-ack');
+    servers.push(server);
+
+    const firstConnectedPromise = onceEvent(server.netifly, 'connect');
+    const senderClient = await connectClient(server.port);
+    clients.push(senderClient);
+    await firstConnectedPromise;
+
+    const secondConnectedPromise = onceEvent(server.netifly, 'connect');
+    const otherTabClient = await connectClient(server.port);
+    clients.push(otherTabClient);
+    await secondConnectedPromise;
+
+    const senderRelayPromise = nextMessage(senderClient);
+    const otherTabRelayPromise = nextMessage(otherTabClient);
+    senderClient.send(JSON.stringify({ type: 'ack', id: 'notif-relay-1' }));
+
+    const senderRelay = JSON.parse(await senderRelayPromise);
+    const otherTabRelay = JSON.parse(await otherTabRelayPromise);
+    expect(senderRelay).toMatchObject({ type: 'netifly.ack', data: { id: 'notif-relay-1' } });
+    expect(otherTabRelay).toMatchObject({ type: 'netifly.ack', data: { id: 'notif-relay-1' } });
+  });
+
+  it('relays a read receipt across two server instances via Redis', async () => {
+    const serverA = await startTestServer(() => 'netiflyServer-relay-cross-instance');
+    const serverB = await startTestServer(() => 'netiflyServer-relay-cross-instance');
+    servers.push(serverA, serverB);
+
+    const connectedOnA = onceEvent(serverA.netifly, 'connect');
+    const clientOnA = await connectClient(serverA.port);
+    clients.push(clientOnA);
+    await connectedOnA;
+
+    const connectedOnB = onceEvent(serverB.netifly, 'connect');
+    const clientOnB = await connectClient(serverB.port);
+    clients.push(clientOnB);
+    await connectedOnB;
+
+    const relayOnB = nextMessage(clientOnB);
+    clientOnA.send(JSON.stringify({ type: 'read', id: 'notif-relay-2' }));
+
+    const envelope = JSON.parse(await relayOnB);
+    expect(envelope).toMatchObject({ type: 'netifly.read', data: { id: 'notif-relay-2' } });
+  });
+
+  it('relays a response with its payload to other connections', async () => {
+    const server = await startTestServer(() => 'netiflyServer-relay-response');
+    servers.push(server);
+
+    const firstConnectedPromise = onceEvent(server.netifly, 'connect');
+    const clientA = await connectClient(server.port);
+    clients.push(clientA);
+    await firstConnectedPromise;
+
+    const secondConnectedPromise = onceEvent(server.netifly, 'connect');
+    const clientB = await connectClient(server.port);
+    clients.push(clientB);
+    await secondConnectedPromise;
+
+    const relayOnB = nextMessage(clientB);
+    clientA.send(JSON.stringify({ type: 'response', id: 'notif-relay-3', payload: { choice: 'decline' } }));
+
+    const envelope = JSON.parse(await relayOnB);
+    expect(envelope).toMatchObject({
+      type: 'netifly.response',
+      data: { id: 'notif-relay-3', payload: { choice: 'decline' } },
+    });
   });
 });

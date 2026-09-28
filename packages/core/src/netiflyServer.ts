@@ -210,13 +210,25 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
 
     const ts = Date.now();
     const frame = parsed.frame;
+    let relayType: string;
+    let relayData: unknown;
+
     if (frame.type === 'ack') {
       this.emit('delivered', { userId, id: frame.id, ts } satisfies AckInfo);
+      relayType = 'netifly.ack';
+      relayData = { id: frame.id };
     } else if (frame.type === 'read') {
       this.emit('read', { userId, id: frame.id, ts } satisfies AckInfo);
+      relayType = 'netifly.read';
+      relayData = { id: frame.id };
     } else {
       this.emit('response', { userId, id: frame.id, payload: frame.payload, ts } satisfies ResponseInfo);
+      relayType = 'netifly.response';
+      relayData = { id: frame.id, payload: frame.payload };
     }
+
+    const relayEnvelope = this.buildEnvelope(relayType, relayData);
+    this.router.publish(userId, relayEnvelope).catch((error: unknown) => this.emitError(error));
   }
 
   private emitMalformedFrame(info: MalformedFrameInfo): void {
