@@ -145,6 +145,13 @@ export interface MalformedFrameInfo {
   reason: MalformedFrameReason;
 }
 
+export interface SentInfo {
+  userId: UserId;
+  id: string;
+  type: string;
+  data: unknown;
+}
+
 export interface CloseOptions {
   /**
    * Milliseconds to wait for clients to acknowledge a graceful close (code
@@ -201,6 +208,7 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   on(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
   on(event: 'response', listener: (info: ResponseInfo) => void): this;
   on(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  on(event: 'sent', listener: (info: SentInfo) => void): this;
   once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
   once(event: 'reject', listener: (info: RejectInfo) => void): this;
@@ -208,6 +216,7 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   once(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
   once(event: 'response', listener: (info: ResponseInfo) => void): this;
   once(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  once(event: 'sent', listener: (info: SentInfo) => void): this;
   close(options?: CloseOptions): Promise<void>;
   /**
    * Whether `userId` has a live connection anywhere in the cluster, derived

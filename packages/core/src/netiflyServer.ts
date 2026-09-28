@@ -23,6 +23,7 @@ import type {
   ResponseInfo,
   SendOrOptions,
   SendResult,
+  SentInfo,
   UserId,
 } from './types';
 
@@ -353,6 +354,12 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     // `(type, data)` pair being sent.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
     const envelope = this.buildEnvelope(type, data);
+    this.emit('sent', {
+      userId,
+      id: envelope.id,
+      type: envelope.type,
+      data: envelope.data,
+    } satisfies SentInfo);
     const instances = await this.router.publish(userId, envelope);
     return { delivered: instances > 0, instances };
   }

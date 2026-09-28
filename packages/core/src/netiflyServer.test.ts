@@ -1280,4 +1280,35 @@ describe('createNetifly', () => {
       data: { id: 'notif-relay-3', payload: { choice: 'decline' } },
     });
   });
+
+  it('emits "sent" synchronously with the generated envelope id before publishing', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sent-hook');
+    servers.push(server);
+
+    const sentPromise = onceInfo<{ userId: string; id: string; type: string; data: unknown }>(
+      server.netifly,
+      'sent'
+    );
+    const resultPromise = server.netifly.send('netiflyServer-sent-hook', 'export.ready', { url: 'x' });
+
+    const info = await sentPromise;
+    expect(info).toMatchObject({
+      userId: 'netiflyServer-sent-hook',
+      type: 'export.ready',
+      data: { url: 'x' },
+    });
+    expect(typeof info.id).toBe('string');
+    await resultPromise;
+  });
+
+  it('emits "sent" for sendOr() as well as send()', async () => {
+    const server = await startTestServer(() => 'netiflyServer-sent-hook-sendor');
+    servers.push(server);
+
+    const sentPromise = onceInfo<{ userId: string; id: string }>(server.netifly, 'sent');
+    await server.netifly.sendOr('netiflyServer-sent-hook-sendor', { hi: true }, { offline: () => {} });
+
+    const info = await sentPromise;
+    expect(info.userId).toBe('netiflyServer-sent-hook-sendor');
+  });
 });
