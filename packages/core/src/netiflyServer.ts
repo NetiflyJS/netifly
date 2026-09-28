@@ -8,6 +8,7 @@ import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
 import { parseInboundFrame } from './inboundFrame';
+import { TokenBucket } from './rateLimiter';
 import { ENVELOPE_VERSION } from './types';
 import type {
   AckInfo,
@@ -30,6 +31,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_PAYLOAD = 4096;
 const DEFAULT_MAX_BUFFERED_BYTES = 1_048_576;
 const DEFAULT_MAX_CONNECTIONS_PER_USER = 10;
+const DEFAULT_MAX_INBOUND_FRAMES_PER_SECOND = 20;
 const DEFAULT_DRAIN_MS = 5000;
 
 class NetiflyServerImpl<Events extends EventMap = EventMap>
@@ -45,6 +47,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
   private readonly maxPayload: number;
   private readonly maxBufferedBytes: number;
   private readonly maxConnectionsPerUser: number;
+  private readonly maxInboundFramesPerSecond: number;
   private readonly validate: CreateNetiflyOptions<Events>['validate'];
   private readonly heartbeatTimer: NodeJS.Timeout;
   private readonly ulid = monotonicFactory();
@@ -58,6 +61,8 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     this.maxPayload = options.maxPayload ?? DEFAULT_MAX_PAYLOAD;
     this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
     this.maxConnectionsPerUser = options.maxConnectionsPerUser ?? DEFAULT_MAX_CONNECTIONS_PER_USER;
+    this.maxInboundFramesPerSecond =
+      options.maxInboundFramesPerSecond ?? DEFAULT_MAX_INBOUND_FRAMES_PER_SECOND;
     this.validate = options.validate;
 
     this.registry = new ConnectionRegistry<WebSocket>({});
@@ -187,10 +192,16 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     subscribed = true;
     this.registry.add(userId, ws);
     this.emit('connect', userId);
-    ws.on('message', (data) => this.handleInboundFrame(userId, data));
+    const inboundBucket = new TokenBucket(this.maxInboundFramesPerSecond);
+    ws.on('message', (data) => this.handleInboundFrame(userId, data, inboundBucket));
   }
 
-  private handleInboundFrame(userId: UserId, data: RawData): void {
+  private handleInboundFrame(userId: UserId, data: RawData, bucket: TokenBucket): void {
+    if (!bucket.tryRemoveToken()) {
+      this.emitMalformedFrame({ userId, reason: 'rateLimited' });
+      return;
+    }
+
     const parsed = parseInboundFrame(data.toString());
     if (!parsed.ok) {
       this.emitMalformedFrame({ userId, reason: parsed.reason });

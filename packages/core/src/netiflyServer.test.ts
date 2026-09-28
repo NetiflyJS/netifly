@@ -1157,4 +1157,32 @@ describe('createNetifly', () => {
     const envelope = JSON.parse(await messagePromise);
     expect(envelope.data).toEqual({ ok: true });
   });
+
+  it('shares the inbound rate-limit budget across ack/read/response frame kinds', async () => {
+    const server = await startTestServer(() => 'netiflyServer-rate-limited-mixed', {
+      maxInboundFramesPerSecond: 2,
+    });
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const rateLimitedPromise = onceInfo<{ userId: string; reason: string }>(server.netifly, 'malformedFrame');
+    client.send(JSON.stringify({ type: 'ack', id: 'a' }));
+    client.send(JSON.stringify({ type: 'read', id: 'b' }));
+    client.send(JSON.stringify({ type: 'response', id: 'c', payload: {} }));
+
+    const info = await rateLimitedPromise;
+    expect(info).toEqual({ userId: 'netiflyServer-rate-limited-mixed', reason: 'rateLimited' });
+
+    // The connection itself survives being rate-limited — it isn't closed,
+    // and normal server → client delivery keeps working on it afterward.
+    expect(client.readyState).toBe(WebSocket.OPEN);
+    const messagePromise = nextMessage(client);
+    await server.netifly.send('netiflyServer-rate-limited-mixed', { ok: true });
+    const envelope = JSON.parse(await messagePromise);
+    expect(envelope.data).toEqual({ ok: true });
+  });
 });

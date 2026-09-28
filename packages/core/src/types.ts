@@ -73,6 +73,13 @@ export interface CreateNetiflyOptions<Events extends EventMap = EventMap> {
    */
   maxConnectionsPerUser?: number;
   /**
+   * Max inbound client frames (ack/read/response) accepted per connection,
+   * per second, via a simple per-connection token bucket. Frames beyond the
+   * limit are dropped and counted via the 'malformedFrame' event (reason
+   * 'rateLimited') rather than closing the connection. Defaults to 20.
+   */
+  maxInboundFramesPerSecond?: number;
+  /**
    * Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of
    * the default `netifly:user:<id>`. Set this when multiple apps (or
    * environments, e.g. staging vs. prod) share one Redis instance — common
