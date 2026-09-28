@@ -120,7 +120,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private wrapListener(listener: (...args: any[]) => void): (...args: any[]) => void {
-    return (...args: any[]) => {
+    return (...args: unknown[]) => {
       let result: unknown;
       try {
         result = listener(...args);

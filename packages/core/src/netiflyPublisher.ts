@@ -40,7 +40,7 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private wrapListener(listener: (...args: any[]) => void): (...args: any[]) => void {
-    return (...args: any[]) => {
+    return (...args: unknown[]) => {
       try {
         const result: unknown = listener(...args);
         if (result instanceof Promise) {
