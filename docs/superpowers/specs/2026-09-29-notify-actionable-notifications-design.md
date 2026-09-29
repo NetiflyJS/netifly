@@ -364,16 +364,31 @@ class NetiflyClient<Events> {
 
 ## 10. Migration notes (for CHANGELOG / release)
 
-- Non-breaking, additive minor-version bump for `@netiflyjs/core` and
-  `@netiflyjs/client` (and `@netiflyjs/express`, which re-exports core's
-  types) — same additive posture as the NOT-30 release.
+- **NOT-37 is non-breaking** — additive minor-version bump for
+  `@netiflyjs/core` (and `@netiflyjs/express`, which re-exports core's
+  types), same additive posture as the NOT-30 release.
+- **NOT-38 is a breaking change**, and ships as a major-version bump for
+  `@netiflyjs/core`/`@netiflyjs/express`. The eager `actionSecret`
+  validation at `createNetifly()`/`createNetiflyPublisher()` construction
+  (§6) means **every existing call site throws at startup** unless it's
+  updated to either configure a secret (`actionSecret` option or
+  `NETIFLY_SECRET` env var) or explicitly opt out with
+  `actionSecret: false`. This is true even for an app that never sends an
+  actionable notification. The CHANGELOG must carry a migration note:
+  *"Upgrading to this version requires adding `{ actionSecret: false }` to
+  your `createNetifly()`/`createNetiflyPublisher()` options, or
+  configuring `NETIFLY_SECRET`/`actionSecret`, or the server will throw at
+  startup."* `@netiflyjs/client` itself has no breaking change (its new
+  methods/subscriptions are additive), but ships alongside the same major
+  version for clarity since the two are meant to be upgraded together.
 - Ship as two sequential releases matching the two tickets: NOT-37 first
-  (`notify()`, `kind: 'info'` only, validation, JSON Schema), then NOT-38
-  (`kind: 'action'`, `actionSecret`, signed tokens, `'action'` event,
-  `respondToAction`/`onActionAck`/`onResolved`).
+  (`notify()`, `kind: 'info'` only, validation, JSON Schema, minor bump),
+  then NOT-38 (`kind: 'action'`, `actionSecret`, signed tokens, `'action'`
+  event, `respondToAction`/`onActionAck`/`onResolved`, major bump).
 - README gets a new "Events vs. notifications: when to use `send()` vs
   `notify()`" section (NOT-37), and a new "Actionable notifications"
   guide with an approval-button example (NOT-38), documenting
-  `actionSecret`/`NETIFLY_SECRET`, the `netifly.actionAck` statuses, and
-  the reserved `netifly.` type-namespace addition
+  `actionSecret`/`NETIFLY_SECRET` (including the startup-throw behavior
+  and the `actionSecret: false` opt-out), the `netifly.actionAck`
+  statuses, and the reserved `netifly.` type-namespace addition
   (`netifly.notification.resolved`, `netifly.actionAck`).
