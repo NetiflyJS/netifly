@@ -262,6 +262,13 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
     data: Events[K],
     options: SendOrOptions
   ): Promise<SendResult>;
+  notify(userId: UserId, notification: Notification): Promise<SendResult>;
+  /**
+   * Like `notify()`, but calls (and awaits) `options.offline()` when the
+   * notification wasn't delivered to any connection anywhere in the
+   * cluster. Resolves with the same `SendResult` either way.
+   */
+  notifyOr(userId: UserId, notification: Notification, options: SendOrOptions): Promise<SendResult>;
   disconnect(userId: UserId): void;
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
