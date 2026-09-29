@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { NetiflyTransport, UserId } from '../types';
 
 /**
@@ -111,16 +112,22 @@ export function runTransportContractTests(
 
     it('claim(): the first caller wins and a later caller for the same key loses', async () => {
       const transport = create();
-      const first = await transport.claim('contract-claim-1', 60);
-      const second = await transport.claim('contract-claim-1', 60);
+      // Unique per test run — claim() TTLs are real (up to 60s here) and
+      // outlive the test process, so a fixed literal key would collide with
+      // a still-live claim from a re-run of this same suite moments earlier
+      // against a persistent Redis.
+      const key = `contract-claim-1-${randomUUID()}`;
+      const first = await transport.claim(key, 60);
+      const second = await transport.claim(key, 60);
       expect(first).toBe(true);
       expect(second).toBe(false);
     });
 
     it('claim(): different keys do not contend with each other', async () => {
       const transport = create();
-      const a = await transport.claim('contract-claim-a', 60);
-      const b = await transport.claim('contract-claim-b', 60);
+      const suffix = randomUUID();
+      const a = await transport.claim(`contract-claim-a-${suffix}`, 60);
+      const b = await transport.claim(`contract-claim-b-${suffix}`, 60);
       expect(a).toBe(true);
       expect(b).toBe(true);
     });
