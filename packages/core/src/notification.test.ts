@@ -6,6 +6,18 @@ function baseNotification(overrides: Partial<InfoNotification> = {}): InfoNotifi
 }
 
 describe('validateNotification', () => {
+  it('rejects a null notification', () => {
+    expect(() => validateNotification(null as unknown as InfoNotification)).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('rejects an undefined notification', () => {
+    expect(() => validateNotification(undefined as unknown as InfoNotification)).toThrow(
+      NotificationValidationError
+    );
+  });
+
   it('accepts a minimal valid notification', () => {
     expect(() => validateNotification(baseNotification())).not.toThrow();
   });
@@ -83,14 +95,24 @@ describe('validateNotification', () => {
     ).not.toThrow();
   });
 
-  it.each(['javascript:alert(1)', 'data:text/html,x', 'vbscript:msgbox(1)', 'not a url'])(
-    'rejects an unsafe link href: %s',
-    (href) => {
-      expect(() =>
-        validateNotification(baseNotification({ link: { href, label: 'Open' } }))
-      ).toThrow(NotificationValidationError);
-    }
-  );
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,x',
+    'vbscript:msgbox(1)',
+    'not a url',
+    '//evil.com/path',
+    '///evil.com'
+  ])('rejects an unsafe link href: %s', (href) => {
+    expect(() =>
+      validateNotification(baseNotification({ link: { href, label: 'Open' } }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a null link (non-TS caller)', () => {
+    expect(() =>
+      validateNotification(baseNotification({ link: null as unknown as InfoNotification['link'] }))
+    ).toThrow(NotificationValidationError);
+  });
 
   it('rejects a link.href that is not a string (non-TS caller)', () => {
     expect(() =>
