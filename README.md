@@ -156,6 +156,25 @@ const netifly = createNetifly<Events>({
 
 `validate` is called with the exact `(type, data)` pair for every `send()`/`sendOr()` call, before the envelope is built or published. Throwing from `validate` aborts the send — nothing is published, and the error propagates straight out of the `send()`/`sendOr()` call (it's not caught or wrapped). Omit `validate` entirely and behavior is unchanged from before this option existed.
 
+### Events vs. notifications: when to use `send()` vs `notify()`
+
+`send()`/`sendOr()` move whatever `type`/`data` your app defines — Netifly has no opinion on the shape. `notify()`/`notifyOr()` are a thin, opinionated layer on top of the exact same delivery path (same envelope, same `SendResult`, same `sendOr`-style offline fallback), for the specific, common case of a user-facing notification:
+
+```ts
+await netifly.notify(userId, {
+  kind: 'info',
+  title: 'Export ready',
+  body: 'Your March report has finished generating.',
+  severity: 'success',
+  link: { href: '/reports/123', label: 'Open' },
+  expiresAt: Date.now() + 24 * 3600_000,
+});
+```
+
+Use `send()` for app-internal events a client-side handler reacts to programmatically (`'comment.created'`, `'export.ready'`, ...). Use `notify()` when the payload *is* the thing a human reads — Netifly validates it server-side (`title`/`body` length limits, a safe `link.href` — rejecting `javascript:`/`data:`/other unsafe schemes) and gives every notification a consistent shape your UI can render generically, without your app hand-rolling that schema itself. A `notify()` call that fails validation throws `NotificationValidationError` (exported from `@netiflyjs/core`) synchronously, before anything is published.
+
+On the wire, `notify()` publishes with envelope `type: "notification"` — an ordinary, unprefixed type, so it flows through the client's normal auto-ack and `lastEventId` tracking exactly like any `send()`-originated message (see [Message Envelope](#-message-envelope)).
+
 ## 📱 Client SDK — `@netiflyjs/client`
 
 Without a client, every adopter hand-rolls reconnect logic. `@netiflyjs/client` is the receiving end of everything above: **zero runtime dependencies**, ~1.7 KB minified + gzipped, and built on the standard `WebSocket` global — so it runs unchanged in browsers, React Native, and Node 22+ (the first Node release with `WebSocket` available unflagged, hence this package's `engines: { node: ">=22" }` — the rest of the repo still supports Node 18+).
@@ -456,6 +475,7 @@ Returns a `NetiflyInstance<Events>`:
   - `SendResult` is `{ delivered: boolean; instances: number }`. `instances` is the number of server instances that held a live connection for `userId` at publish time — this comes straight from Redis's own `PUBLISH` return value (the subscriber count), so Netifly can tell you **at publish time** whether the user was reachable, something channel-based systems like Pusher/Ably can't do. `delivered` is just `instances > 0`.
   - ⚠️ **Caveat**: `delivered: true` means the message reached a server process holding a live socket for that user — it does **not** mean the user's client actually received or rendered it. For that, listen for `'delivered'`/`'read'` (see below) — the client's `markRead()`/auto-ack, not this return value, is the source of truth for actual receipt.
 - `sendOr<T>(userId, payload: T, options: { offline: () => void | Promise<void> }): Promise<SendResult>` / `sendOr<K extends keyof Events & string>(userId, type: K, data: Events[K], options): Promise<SendResult>` — sugar over `send()`: calls `send()` with the same arguments, and if the result is `{ delivered: false }`, calls `options.offline()` and awaits it (if it returns a promise) before resolving. Always resolves with the same `SendResult` `send()` would have. A rejection from `offline()` propagates out of `sendOr()` — it's not swallowed.
+- `notify(userId, notification): Promise<SendResult>` / `notifyOr(userId, notification, options): Promise<SendResult>` — validated, opinionated counterparts to `send()`/`sendOr()` for user-facing notifications (see [Events vs. notifications](#events-vs-notifications-when-to-use-send-vs-notify)). `notification` is `{ kind: 'info', title, body, severity?, link?, icon?, expiresAt?, meta? }`; a validation failure throws `NotificationValidationError` synchronously and nothing is published. Publishes with envelope `type: "notification"`.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, ... }) => void)`, `on('dropped', ({ userId, reason }) => void)` — **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, connection failures (with the default Redis transport) are completely invisible.
   - `reject` fires when an upgrade is rejected before a connection is established. `reason: 'origin'` is the Origin/CSWSH check (`{ status: 403, origin, req }`); `reason: 'maxConnectionsPerUser'` fires when a `userId` is already at `maxConnectionsPerUser` **on this instance** (`{ status: 429, userId, req }`) — it does not mean the user is at the cap cluster-wide (see [Limits](#limits)); `reason: 'auth'` fires when `resolveUserId` rejects the connection — returns a falsy value, or throws (`{ status: 401, error, req }`, where `error` is the thrown `Error`, or `undefined` if `resolveUserId` simply returned a falsy value without throwing).
@@ -495,6 +515,7 @@ Supports the same `<Events>` type parameter and `validate` option as `createNeti
 Returns a `NetiflyPublisher<Events>` — a lighter-weight, send-only counterpart to `NetiflyInstance`, backed by a single lazily-connected Redis client (no subscriber connection, no WebSocket server):
 
 - `send<T>(userId, payload: T): Promise<SendResult>` / `send<K extends keyof Events & string>(userId, type: K, data: Events[K]): Promise<SendResult>` — identical envelope/delivery semantics to `NetiflyInstance.send()` (see [Message Envelope](#-message-envelope) above for the shape, and `createNetifly`'s `send()` entry above for the `SendResult`/`delivered` caveat, and [Typed events](#typed-events) for the `Events`-checked overload).
+- `notify(userId, notification): Promise<SendResult>` — same validated notification API as `NetiflyInstance.notify()` above. No `notifyOr()` on `NetiflyPublisher`, matching its existing `send()`-only (no `sendOr()`) surface.
 - `isOnline(userId): Promise<boolean>` / `whoIsOnline(userIds): Promise<Record<string, boolean>>` — identical semantics/caveats to `NetiflyInstance`'s.
 - `close(): Promise<void>` — disconnects the publisher's Redis connection. Call it before a short-lived process (e.g. a serverless invocation) exits. Calling `send()`/`isOnline()`/`whoIsOnline()` after `close()` throws `Netifly: cannot use publisher after close()`.
 
