@@ -969,10 +969,10 @@ to:
 Run: `cd packages/core && npx jest transports/redisTransport.test.ts`
 Expected: PASS (4 `channelName` tests + 8 contract-suite tests + 6 Redis-specific tests)
 
-Also run the full suite once here to confirm nothing else broke from the delete/rename (expect `netiflyPublisher.test.ts` and `netiflyServer.test.ts` to still be red at this point — Task 4 fixes them):
+Also run the full suite once here to confirm nothing else broke from the delete/rename (expect only `netiflyServer.test.ts` to still be red at this point — Task 4 fixes it):
 
 Run: `cd packages/core && npx jest`
-Expected: `transports/redisTransport.test.ts`, `transports/memoryTransport.test.ts`, `transports/refCountedTransport.test.ts` PASS. `netiflyServer.test.ts` and `netiflyPublisher.test.ts` FAIL to even load (`Cannot find module './redisRouter'` from `netiflyServer.ts`'s still-old import) — expected until Task 4.
+Expected: `transports/redisTransport.test.ts`, `transports/memoryTransport.test.ts`, `transports/refCountedTransport.test.ts`, and `netiflyPublisher.test.ts` all PASS (Step 5 above already repointed `netiflyPublisher.ts`'s import, so it isn't affected by the delete). `netiflyServer.test.ts` FAILS to even load (`Cannot find module './redisRouter'` — it imports that path directly, and `netiflyServer.ts` itself still does too) — expected until Task 4.
 
 - [ ] **Step 8: Commit**
 
