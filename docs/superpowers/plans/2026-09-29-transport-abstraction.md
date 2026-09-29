@@ -956,10 +956,10 @@ to:
 Run: `cd packages/core && npx jest transports/redisTransport.test.ts`
 Expected: PASS (4 `channelName` tests + 8 contract-suite tests + 6 Redis-specific tests)
 
-Also run the full suite once here to confirm nothing else broke from the delete/rename (expect only `netiflyServer.test.ts` to still be red at this point — Task 4 fixes it):
+Also run the full suite once here to confirm nothing else broke from the delete/rename:
 
 Run: `cd packages/core && npx jest`
-Expected: `transports/redisTransport.test.ts`, `transports/memoryTransport.test.ts`, `transports/refCountedTransport.test.ts`, and `netiflyPublisher.test.ts` all PASS (Step 5 above already repointed `netiflyPublisher.ts`'s import, so it isn't affected by the delete). `netiflyServer.test.ts` FAILS to even load (`Cannot find module './redisRouter'` — it imports that path directly, and `netiflyServer.ts` itself still does too) — expected until Task 4.
+Expected: `transports/redisTransport.test.ts`, `transports/memoryTransport.test.ts`, `transports/refCountedTransport.test.ts` all PASS. `netiflyServer.test.ts` FAILS to even load (`Cannot find module './redisRouter'` — it imports that path directly, and `netiflyServer.ts` itself still does too) — expected until Task 4. `netiflyPublisher.test.ts` ALSO fails to load at this point, even though Step 5 above already repointed `netiflyPublisher.ts`'s own import: that test file separately imports `createNetifly` from `./netiflyServer` (for round-trip tests against a real server), so it transitively hits the same still-broken `netiflyServer.ts` import. This is expected too, purely from that cross-file dependency — not something to fix in this task — and resolves once Task 4 fixes `netiflyServer.ts`.
 
 - [ ] **Step 8: Commit**
 
