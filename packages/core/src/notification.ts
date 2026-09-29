@@ -9,9 +9,15 @@ const MAX_LINK_LABEL_LENGTH = 80;
 const SEVERITIES = new Set(['info', 'success', 'warning', 'error']);
 
 function isSafeLinkHref(href: string): boolean {
+  // Reject protocol-relative URLs (//host/path), which browsers resolve as absolute cross-origin URLs
+  if (href.startsWith('//')) {
+    return false;
+  }
+  // Accept relative paths starting with exactly one /
   if (href.startsWith('/')) {
     return true;
   }
+  // Accept http(s) URLs
   try {
     const url = new URL(href);
     return url.protocol === 'http:' || url.protocol === 'https:';
@@ -28,6 +34,10 @@ function isSafeLinkHref(href: string): boolean {
  * Review Focus). Throws `NotificationValidationError` on the first failure.
  */
 export function validateNotification(notification: Notification): void {
+  if (notification === null || typeof notification !== 'object') {
+    throw new NotificationValidationError('Netifly: notify() requires a notification object');
+  }
+
   const kind = (notification as { kind?: unknown }).kind;
   if (kind !== 'info') {
     throw new NotificationValidationError(
@@ -57,6 +67,12 @@ export function validateNotification(notification: Notification): void {
   }
 
   if (notification.link !== undefined) {
+    if (notification.link === null || typeof notification.link !== 'object') {
+      throw new NotificationValidationError(
+        `Netifly: notify() link must be an object, got ${JSON.stringify(notification.link)}`
+      );
+    }
+
     const href = (notification.link as { href?: unknown }).href;
     const label = (notification.link as { label?: unknown }).label;
 
