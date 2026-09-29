@@ -175,6 +175,28 @@ Use `send()` for app-internal events a client-side handler reacts to programmati
 
 On the wire, `notify()` publishes with envelope `type: "notification"` — an ordinary, unprefixed type, so it flows through the client's normal auto-ack and `lastEventId` tracking exactly like any `send()`-originated message (see [Message Envelope](#-message-envelope)).
 
+Because `type: "notification"` is just an ordinary envelope type, a typed `NetiflyClient<Events>` subscribes to it the same way it subscribes to any app event: add a `notification` entry to your app's own `Events` map, then call `client.on('notification', ...)`. There's nothing special about the name `'notification'` here — it just has to match the `type` your server publishes with.
+
+```ts
+import { createNetiflyClient } from '@netiflyjs/client';
+import type { Notification } from '@netiflyjs/core';
+// `@netiflyjs/client` has zero runtime dependencies and doesn't import from
+// `@netiflyjs/core` itself, but a type-only import like this is fine even in
+// a browser bundle — it's erased entirely at compile time.
+
+type Events = {
+  'export.ready': { url: string };
+  notification: Notification;
+};
+
+const client = createNetiflyClient<Events>({ url: 'wss://api.example.com/netifly' });
+client.on('notification', (notification) => {
+  toast(notification.title, { body: notification.body });
+});
+```
+
+For contexts without direct access to these TypeScript types — a non-Node publisher validating a payload before sending, say — `@netiflyjs/core` also exports `notificationJsonSchema`, a JSON Schema (draft-07) describing the same shape, for runtime validation.
+
 ## 📱 Client SDK — `@netiflyjs/client`
 
 Without a client, every adopter hand-rolls reconnect logic. `@netiflyjs/client` is the receiving end of everything above: **zero runtime dependencies**, ~1.7 KB minified + gzipped, and built on the standard `WebSocket` global — so it runs unchanged in browsers, React Native, and Node 22+ (the first Node release with `WebSocket` available unflagged, hence this package's `engines: { node: ">=22" }` — the rest of the repo still supports Node 18+).
