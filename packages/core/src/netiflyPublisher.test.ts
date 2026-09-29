@@ -4,6 +4,7 @@ import WebSocket from 'ws';
 import type Redis from 'ioredis';
 import { createNetifly } from './netiflyServer';
 import { createNetiflyPublisher } from './netiflyPublisher';
+import { NotificationValidationError } from './notification';
 import type { CreateNetiflyOptions, NetiflyInstance, NetiflyPublisher } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
@@ -299,5 +300,70 @@ describe('createNetiflyPublisher', () => {
     await publisher.send('netiflyPublisher-once-still-once', { b: 2 });
 
     expect(calls).toHaveLength(1);
+  });
+
+  describe('notify()', () => {
+    it('publishes a valid info notification that a connected server delivers to the client', async () => {
+      const server = await startTestServer(() => 'netiflyPublisher-notify-user');
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+      publishers.push(publisher);
+
+      const messagePromise = nextMessage(ws);
+      const result = await publisher.notify('netiflyPublisher-notify-user', {
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Your report has finished generating.',
+      });
+
+      expect(result).toEqual({ delivered: true, instances: 1 });
+      const envelope = JSON.parse(await messagePromise);
+      expect(envelope.type).toBe('notification');
+      expect(envelope.data).toEqual({
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Your report has finished generating.',
+      });
+    });
+
+    it('rejects an invalid notification without publishing anything', async () => {
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+      publishers.push(publisher);
+
+      await expect(
+        publisher.notify('netiflyPublisher-notify-invalid', { kind: 'info', title: '', body: 'x' })
+      ).rejects.toThrow(NotificationValidationError);
+    });
+
+    it('does not run the app-level validate hook for notify()', async () => {
+      const validate = jest.fn();
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, validate });
+      publishers.push(publisher);
+
+      await publisher.notify('netiflyPublisher-notify-no-app-validate', {
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Done.',
+      });
+      expect(validate).not.toHaveBeenCalled();
+    });
+
+    it('throws after close(), same as send()', async () => {
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+      await publisher.close();
+
+      await expect(
+        publisher.notify('netiflyPublisher-notify-after-close', {
+          kind: 'info',
+          title: 'Export ready',
+          body: 'Done.',
+        })
+      ).rejects.toThrow('Netifly: cannot use publisher after close()');
+    });
   });
 });

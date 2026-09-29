@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import Redis from 'ioredis';
 import { monotonicFactory } from 'ulid';
+import { validateNotification } from './notification';
 import { disconnectRedis } from './redisDisconnect';
 import { channelName } from './transports/redisTransport';
 import { ENVELOPE_VERSION } from './types';
@@ -9,6 +10,7 @@ import type {
   Envelope,
   EventMap,
   NetiflyPublisher,
+  Notification,
   SendResult,
   SentInfo,
   UserId,
@@ -99,6 +101,18 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
     // See the matching comment in netiflyServer.ts's sendInternal for why
     // this cast is needed at the call site.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
+    return this.publishEnvelope(userId, type, data);
+  }
+
+  async notify(userId: UserId, notification: Notification): Promise<SendResult> {
+    this.assertNotClosed();
+    validateNotification(notification);
+    return this.publishEnvelope(userId, 'notification', notification);
+  }
+
+  // Shared by send() and notify() — deliberately does NOT run `this.validate`;
+  // see the matching comment on netiflyServer.ts's publishEnvelope() for why.
+  private async publishEnvelope<T>(userId: UserId, type: string, data: T): Promise<SendResult> {
     const envelope = this.buildEnvelope(type, data);
     this.emit('sent', {
       userId,

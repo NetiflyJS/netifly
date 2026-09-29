@@ -343,6 +343,7 @@ export interface CreateNetiflyPublisherOptions<Events extends EventMap = EventMa
 export interface NetiflyPublisher<Events extends EventMap = EventMap> {
   send<T>(userId: UserId, payload: T): Promise<SendResult>;
   send<K extends keyof Events & string>(userId: UserId, type: K, data: Events[K]): Promise<SendResult>;
+  notify(userId: UserId, notification: Notification): Promise<SendResult>;
   /** Fires synchronously inside send(), with the generated envelope id, before publishing. */
   on(event: 'sent', listener: (info: SentInfo) => void): this;
   once(event: 'sent', listener: (info: SentInfo) => void): this;
