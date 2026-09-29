@@ -1,3 +1,19 @@
+# [@netiflyjs/core-v1.12.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.11.0...@netiflyjs/core-v1.12.0) (2026-09-29)
+
+
+### Bug Fixes
+
+* **core:** address final review findings for transport abstraction (NOT-20) ([c2d839c](https://github.com/NetiflyJS/netifly/commit/c2d839cf8ae530d9590820f33f0745496a88d8c9))
+* **core:** make memoryTransport() single-process, fix contract suite to match (NOT-20) ([f74fdf8](https://github.com/NetiflyJS/netifly/commit/f74fdf8b8ea4a0ab58b1eb00ca8df3265db6e27e))
+
+
+### Features
+
+* **core:** add NetiflyTransport interface, contract suite, and memoryTransport() (NOT-20) ([7607192](https://github.com/NetiflyJS/netifly/commit/7607192065f345b1fba7931d35a302450abfb601))
+* **core:** add RefCountedTransport, lifting subscribe overlap out of the raw transport (NOT-20) ([a7479a3](https://github.com/NetiflyJS/netifly/commit/a7479a385b1aa4033cafac9a38ce657e28478486))
+* **core:** extract redisTransport() from RedisRouter (NOT-20) ([cdd849e](https://github.com/NetiflyJS/netifly/commit/cdd849e84850ce7184bca9e72608793a23121821))
+* **core:** wire createNetifly() to the transport abstraction (NOT-20) ([c5f0165](https://github.com/NetiflyJS/netifly/commit/c5f016527f4969aad42e5389f7b4455841d9745f))
+
 # [@netiflyjs/core-v1.11.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.10.1...@netiflyjs/core-v1.11.0) (2026-09-28)
 
 
