@@ -36,6 +36,10 @@ export function channelName(userId: UserId, namespace?: string): string {
   return `${channelPrefix(namespace)}${userId}`;
 }
 
+function claimKeyPrefix(namespace?: string): string {
+  return namespace ? `${CHANNEL_PREFIX}${namespace}:` : CHANNEL_PREFIX;
+}
+
 /**
  * Redis pub/sub-backed NetiflyTransport — the default. Exported as a class
  * (rather than a closure, like memoryTransport()) so its own test file can
@@ -126,6 +130,19 @@ export class RedisTransportImpl implements NetiflyTransport {
       counts[userId] = reply[index * 2 + 1] as number;
     });
     return counts;
+  }
+
+  /**
+   * `SET key value EX ttlSeconds NX` — the first caller across any instance
+   * to successfully SET wins; every later attempt for the same key gets
+   * `false` back until the key expires. Run on `this.publisher` (a plain
+   * client, safe for arbitrary commands, same reasoning as `receivers()`
+   * above). The stored value itself is never read back — only the SET's
+   * own success/failure matters.
+   */
+  async claim(key: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.publisher.set(`${claimKeyPrefix(this.namespace)}${key}`, '1', 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
   }
 
   onMessage(cb: (userId: UserId, message: string) => void): void {

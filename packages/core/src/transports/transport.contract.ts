@@ -109,6 +109,22 @@ export function runTransportContractTests(
       await expect(transport.receivers([])).resolves.toEqual({});
     });
 
+    it('claim(): the first caller wins and a later caller for the same key loses', async () => {
+      const transport = create();
+      const first = await transport.claim('contract-claim-1', 60);
+      const second = await transport.claim('contract-claim-1', 60);
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+    });
+
+    it('claim(): different keys do not contend with each other', async () => {
+      const transport = create();
+      const a = await transport.claim('contract-claim-a', 60);
+      const b = await transport.claim('contract-claim-b', 60);
+      expect(a).toBe(true);
+      expect(b).toBe(true);
+    });
+
     it('close() on a transport that was never subscribed to anything does not throw', async () => {
       const transport = makeTransport(); // not pushed to `transports` — closed here directly
       await expect(transport.close()).resolves.toBeUndefined();
