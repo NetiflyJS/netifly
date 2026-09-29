@@ -2,21 +2,28 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
+import type { RawData } from 'ws';
 import { monotonicFactory } from 'ulid';
 import { ConnectionRegistry } from './connectionRegistry';
 import { RedisRouter } from './redisRouter';
 import { startHeartbeat } from './heartbeat';
+import { parseInboundFrame } from './inboundFrame';
+import { TokenBucket } from './rateLimiter';
 import { ENVELOPE_VERSION } from './types';
 import type {
+  AckInfo,
   AllowedOrigins,
   CloseOptions,
   CreateNetiflyOptions,
   Envelope,
   EventMap,
+  MalformedFrameInfo,
   NetiflyInstance,
   RejectInfo,
+  ResponseInfo,
   SendOrOptions,
   SendResult,
+  SentInfo,
   UserId,
 } from './types';
 
@@ -25,7 +32,17 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_PAYLOAD = 4096;
 const DEFAULT_MAX_BUFFERED_BYTES = 1_048_576;
 const DEFAULT_MAX_CONNECTIONS_PER_USER = 10;
+const DEFAULT_MAX_INBOUND_FRAMES_PER_SECOND = 20;
 const DEFAULT_DRAIN_MS = 5000;
+
+// Events introduced for client acks/read state (NOT-30) — a listener that
+// throws or rejects on one of these must never crash the host process or
+// block other listeners for the same event (spec §9). Registered listeners
+// for these events are wrapped (see wrapListener) so a bad app hook — e.g.
+// one that persists to a database and occasionally rejects — can't take the
+// server down. Pre-existing events ('connect'/'disconnect'/'error'/
+// 'reject'/'dropped') keep their existing unwrapped behavior.
+const SAFE_EVENTS = new Set(['sent', 'delivered', 'read', 'response', 'malformedFrame']);
 
 class NetiflyServerImpl<Events extends EventMap = EventMap>
   extends EventEmitter
@@ -40,6 +57,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
   private readonly maxPayload: number;
   private readonly maxBufferedBytes: number;
   private readonly maxConnectionsPerUser: number;
+  private readonly maxInboundFramesPerSecond: number;
   private readonly validate: CreateNetiflyOptions<Events>['validate'];
   private readonly heartbeatTimer: NodeJS.Timeout;
   private readonly ulid = monotonicFactory();
@@ -53,6 +71,8 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     this.maxPayload = options.maxPayload ?? DEFAULT_MAX_PAYLOAD;
     this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
     this.maxConnectionsPerUser = options.maxConnectionsPerUser ?? DEFAULT_MAX_CONNECTIONS_PER_USER;
+    this.maxInboundFramesPerSecond =
+      options.maxInboundFramesPerSecond ?? DEFAULT_MAX_INBOUND_FRAMES_PER_SECOND;
     this.validate = options.validate;
 
     this.registry = new ConnectionRegistry<WebSocket>({});
@@ -80,6 +100,38 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     options.server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
       void this.handleUpgrade(req, socket, head);
     });
+  }
+
+  // Overridden (rather than relying on the inherited EventEmitter methods,
+  // as every other event still does) only to wrap listeners for SAFE_EVENTS
+  // — see the comment on that constant. Node's own once()/removeListener
+  // machinery is untouched: we wrap the listener function itself before
+  // handing it to super.on()/super.once(), so native once-after-first-call
+  // semantics still apply to our wrapper, not to the caller's function.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.on(event, SAFE_EVENTS.has(event as string) ? this.wrapListener(listener) : listener);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  once(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.once(event, SAFE_EVENTS.has(event as string) ? this.wrapListener(listener) : listener);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private wrapListener(listener: (...args: any[]) => void): (...args: any[]) => void {
+    return (...args: unknown[]) => {
+      let result: unknown;
+      try {
+        result = listener(...args);
+      } catch (error) {
+        this.emitError(error);
+        return;
+      }
+      if (result instanceof Promise) {
+        result.catch((error: unknown) => this.emitError(error));
+      }
+    };
   }
 
   private async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
@@ -182,6 +234,47 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     subscribed = true;
     this.registry.add(userId, ws);
     this.emit('connect', userId);
+    const inboundBucket = new TokenBucket(this.maxInboundFramesPerSecond);
+    ws.on('message', (data) => this.handleInboundFrame(userId, data, inboundBucket));
+  }
+
+  private handleInboundFrame(userId: UserId, data: RawData, bucket: TokenBucket): void {
+    if (!bucket.tryRemoveToken()) {
+      this.emitMalformedFrame({ userId, reason: 'rateLimited' });
+      return;
+    }
+
+    const parsed = parseInboundFrame(data.toString());
+    if (!parsed.ok) {
+      this.emitMalformedFrame({ userId, reason: parsed.reason });
+      return;
+    }
+
+    const ts = Date.now();
+    const frame = parsed.frame;
+    let relayType: string;
+    let relayData: unknown;
+
+    if (frame.type === 'ack') {
+      this.emit('delivered', { userId, id: frame.id, ts } satisfies AckInfo);
+      relayType = 'netifly.ack';
+      relayData = { id: frame.id };
+    } else if (frame.type === 'read') {
+      this.emit('read', { userId, id: frame.id, ts } satisfies AckInfo);
+      relayType = 'netifly.read';
+      relayData = { id: frame.id };
+    } else {
+      this.emit('response', { userId, id: frame.id, payload: frame.payload, ts } satisfies ResponseInfo);
+      relayType = 'netifly.response';
+      relayData = { id: frame.id, payload: frame.payload };
+    }
+
+    const relayEnvelope = this.buildEnvelope(relayType, relayData);
+    this.router.publish(userId, relayEnvelope).catch((error: unknown) => this.emitError(error));
+  }
+
+  private emitMalformedFrame(info: MalformedFrameInfo): void {
+    this.emit('malformedFrame', info);
   }
 
   private isOriginAllowed(origin: string | undefined, req: IncomingMessage): boolean {
@@ -302,6 +395,12 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     // `(type, data)` pair being sent.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
     const envelope = this.buildEnvelope(type, data);
+    this.emit('sent', {
+      userId,
+      id: envelope.id,
+      type: envelope.type,
+      data: envelope.data,
+    } satisfies SentInfo);
     const instances = await this.router.publish(userId, envelope);
     return { delivered: instances > 0, instances };
   }

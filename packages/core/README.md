@@ -100,12 +100,17 @@ or explicitly via the `redisUrl` option to `createNetifly()`/`attachNetifly()`, 
 | `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Netifly throws at construction time if neither is set (no default/local fallback). |
 | `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
 | `allowedOrigins` | `(string \| RegExp)[] \| ((origin) => boolean) \| '*'` | — | Defaults to same-host only. See [Security](https://github.com/NetiflyJS/netifly#-security). |
+| `maxInboundFramesPerSecond` | `number` | — | Max inbound client frames (ack/read/response) accepted per connection, per second. Frames beyond the limit are dropped and counted via `'malformedFrame'` (reason `'rateLimited'`) rather than closing the connection. Defaults to `20`. |
 
 Returns a `NetiflyInstance`:
 
 - `send(userId, payload): Promise<void>` — delivers `payload` to every connection that user has open, anywhere in your cluster. No-op if the user isn't connected anywhere.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, origin, req }) => void)` — fires when the origin check rejects an upgrade. **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, Redis/connection failures are completely invisible.
+- `on('sent', ({ userId, id, type, data }) => void)` — fires synchronously inside `send()`/`sendOr()` (and on `NetiflyPublisher`, too) with the generated envelope id, before the envelope is published. A place to persist a notification record at send time.
+- `on('delivered' | 'read', ({ userId, id, ts }) => void)` — fires when a client sends `{ type: 'ack' | 'read', id }` back over its WebSocket connection, exactly once per client action (never once per server instance). Also relayed to the user's other open connections as a `netifly.ack`/`netifly.read` envelope, for multi-tab/multi-device sync.
+- `on('response', ({ userId, id, payload, ts }) => void)` — fires when a client sends `{ type: 'response', id, payload }` with an arbitrary JSON payload (e.g. a reply to an action button). Relayed the same way, as `netifly.response`.
+- `on('malformedFrame', ({ userId, reason }) => void)` — fires instead of throwing when an inbound client frame is invalid JSON, the wrong shape, or over `maxInboundFramesPerSecond` (`reason`: `'invalidJson' | 'invalidShape' | 'rateLimited'`). The connection is never closed for this.
 - `close(): Promise<void>` — graceful shutdown: stops the heartbeat, closes the WS server, and closes both Redis connections.
 
 ### `attachNetifly(app, options)` — `@netiflyjs/express`

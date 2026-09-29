@@ -73,6 +73,13 @@ export interface CreateNetiflyOptions<Events extends EventMap = EventMap> {
    */
   maxConnectionsPerUser?: number;
   /**
+   * Max inbound client frames (ack/read/response) accepted per connection,
+   * per second, via a simple per-connection token bucket. Frames beyond the
+   * limit are dropped and counted via the 'malformedFrame' event (reason
+   * 'rateLimited') rather than closing the connection. Defaults to 20.
+   */
+  maxInboundFramesPerSecond?: number;
+  /**
    * Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of
    * the default `netifly:user:<id>`. Set this when multiple apps (or
    * environments, e.g. staging vs. prod) share one Redis instance — common
@@ -116,6 +123,33 @@ export type RejectInfo =
 export interface DroppedInfo {
   userId: UserId;
   reason: 'maxBufferedBytes';
+}
+
+export interface AckInfo {
+  userId: UserId;
+  id: string;
+  ts: number;
+}
+
+export interface ResponseInfo {
+  userId: UserId;
+  id: string;
+  payload: unknown;
+  ts: number;
+}
+
+export type MalformedFrameReason = 'invalidJson' | 'invalidShape' | 'rateLimited';
+
+export interface MalformedFrameInfo {
+  userId: UserId;
+  reason: MalformedFrameReason;
+}
+
+export interface SentInfo {
+  userId: UserId;
+  id: string;
+  type: string;
+  data: unknown;
 }
 
 export interface CloseOptions {
@@ -171,10 +205,18 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   on(event: 'error', listener: (error: Error) => void): this;
   on(event: 'reject', listener: (info: RejectInfo) => void): this;
   on(event: 'dropped', listener: (info: DroppedInfo) => void): this;
+  on(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
+  on(event: 'response', listener: (info: ResponseInfo) => void): this;
+  on(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  on(event: 'sent', listener: (info: SentInfo) => void): this;
   once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
   once(event: 'reject', listener: (info: RejectInfo) => void): this;
   once(event: 'dropped', listener: (info: DroppedInfo) => void): this;
+  once(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
+  once(event: 'response', listener: (info: ResponseInfo) => void): this;
+  once(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  once(event: 'sent', listener: (info: SentInfo) => void): this;
   close(options?: CloseOptions): Promise<void>;
   /**
    * Whether `userId` has a live connection anywhere in the cluster, derived
@@ -232,6 +274,9 @@ export interface CreateNetiflyPublisherOptions<Events extends EventMap = EventMa
 export interface NetiflyPublisher<Events extends EventMap = EventMap> {
   send<T>(userId: UserId, payload: T): Promise<SendResult>;
   send<K extends keyof Events & string>(userId: UserId, type: K, data: Events[K]): Promise<SendResult>;
+  /** Fires synchronously inside send(), with the generated envelope id, before publishing. */
+  on(event: 'sent', listener: (info: SentInfo) => void): this;
+  once(event: 'sent', listener: (info: SentInfo) => void): this;
   /**
    * Whether `userId` has a live connection anywhere in the cluster. Same
    * semantics/accuracy caveat as `NetiflyInstance.isOnline`.

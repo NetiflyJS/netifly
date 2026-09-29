@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import Redis from 'ioredis';
 import { monotonicFactory } from 'ulid';
 import { disconnectRedis } from './redisDisconnect';
@@ -9,17 +10,50 @@ import type {
   EventMap,
   NetiflyPublisher,
   SendResult,
+  SentInfo,
   UserId,
 } from './types';
 
-class NetiflyPublisherImpl<Events extends EventMap = EventMap> implements NetiflyPublisher<Events> {
+class NetiflyPublisherImpl<Events extends EventMap = EventMap>
+  extends EventEmitter
+  implements NetiflyPublisher<Events>
+{
   private readonly redis: Redis;
   private readonly namespace: string | undefined;
   private readonly validate: CreateNetiflyPublisherOptions<Events>['validate'];
   private readonly ulid = monotonicFactory();
   private closed = false;
 
+  // Overridden so a throwing/rejecting 'sent' listener can never crash the
+  // host process (NOT-30 spec §9) — NetiflyPublisher has no 'error' event to
+  // route a failure to (unlike NetiflyInstance), so it's caught and dropped;
+  // preventing the crash is what matters here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.on(event, this.wrapListener(listener));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  once(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.once(event, this.wrapListener(listener));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private wrapListener(listener: (...args: any[]) => void): (...args: any[]) => void {
+    return (...args: unknown[]) => {
+      try {
+        const result: unknown = listener(...args);
+        if (result instanceof Promise) {
+          result.catch(() => undefined);
+        }
+      } catch {
+        // No 'error' event to report through — dropping is the point.
+      }
+    };
+  }
+
   constructor(options: CreateNetiflyPublisherOptions<Events>) {
+    super();
     this.namespace = options.namespace;
     this.validate = options.validate;
 
@@ -66,6 +100,12 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap> implements Netifl
     // this cast is needed at the call site.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
     const envelope = this.buildEnvelope(type, data);
+    this.emit('sent', {
+      userId,
+      id: envelope.id,
+      type: envelope.type,
+      data: envelope.data,
+    } satisfies SentInfo);
 
     let serialized: string;
     try {

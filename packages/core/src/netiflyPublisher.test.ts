@@ -257,4 +257,47 @@ describe('createNetiflyPublisher', () => {
 
     expect((publisher as unknown as { redis: Redis }).redis.status).toBe('end');
   });
+
+  it('emits "sent" synchronously with the generated id before publishing', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    const sentPromise = new Promise<{ userId: string; id: string; type: string; data: unknown }>(
+      (resolve) => publisher.once('sent', (info) => resolve(info))
+    );
+    await publisher.send('netiflyPublisher-sent-hook', 'export.ready', { url: 'x' });
+
+    const info = await sentPromise;
+    expect(info).toMatchObject({
+      userId: 'netiflyPublisher-sent-hook',
+      type: 'export.ready',
+      data: { url: 'x' },
+    });
+    expect(typeof info.id).toBe('string');
+  });
+
+  it('isolates a throwing "sent" listener: send() still resolves and publishes', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    publisher.on('sent', () => {
+      throw new Error('boom-publisher-sent');
+    });
+
+    const result = await publisher.send('netiflyPublisher-sent-throws', { ok: true });
+    expect(result).toEqual({ delivered: false, instances: 0 });
+  });
+
+  it('a "once" listener on "sent" still fires exactly once despite the safety wrapper', async () => {
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    publishers.push(publisher);
+
+    const calls: unknown[] = [];
+    publisher.once('sent', (info) => calls.push(info));
+
+    await publisher.send('netiflyPublisher-once-still-once', { a: 1 });
+    await publisher.send('netiflyPublisher-once-still-once', { b: 2 });
+
+    expect(calls).toHaveLength(1);
+  });
 });
