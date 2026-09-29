@@ -40,7 +40,7 @@
 **Files:**
 - Modify: `packages/core/src/types.ts`
 - Modify: `packages/core/src/notification.ts` (full rewrite of the file's contents)
-- Modify: `packages/core/src/notification.test.ts` (append new cases)
+- Modify: `packages/core/src/notification.test.ts` (full rewrite — see the base-state note before Step 1; preserves all existing cases, adds `kind: 'action'` coverage)
 
 **Interfaces:**
 - Consumes: `InfoNotification`, `Notification` (= `InfoNotification` only), `NotificationValidationError`, `validateNotification` from NOT-37's Task 1.
@@ -121,7 +121,9 @@ and mirror it in the file's `once(...)` block, right after the existing `once(ev
   ): this;
 ```
 
-Now rewrite `packages/core/src/notification.test.ts` in full (adds `kind: 'action'` coverage alongside the existing `kind: 'info'` cases):
+**⚠️ This step's "before" state changed since this plan was written.** A prior plan (NOT-37) shipped, went through a final-branch review, and picked up a fix-round commit (`3a4e15f`) that added things this plan's original text doesn't know about: a top-level `null`/non-object guard, exported `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH` constants, a corrected `isSafeLinkHref()` (resolve-and-compare-origin, replacing an earlier `startsWith('//')` check that a security review found bypassable), and new `icon`/`expiresAt`/`meta` validation for `kind: 'info'`. The controller re-read the actual current `packages/core/src/notification.ts` and `notification.test.ts` and rewrote this step to build on top of that real file rather than the older one this plan was originally drafted against — **follow the version below, not a from-memory recollection of an earlier draft.** The existing test `"rejects kind: 'action' (not supported by this version of notify())"` no longer holds (this plan makes `kind: 'action'` valid) and is removed below, replaced by `"rejects an unrecognized kind"` using a nonsense kind value instead.
+
+Rewrite `packages/core/src/notification.test.ts` in full (preserves every existing `kind: 'info'` case — including the `null`/undefined-notification guards, the 11-vector unsafe-href table, and the `icon`/`expiresAt`/`meta` cases already in the file from NOT-37's fix round — and adds `kind: 'action'` coverage):
 
 ```ts
 import { NotificationValidationError, validateNotification } from './notification';
@@ -143,6 +145,18 @@ function baseAction(overrides: Partial<ActionNotification> = {}): ActionNotifica
 }
 
 describe('validateNotification: kind: info', () => {
+  it('rejects a null notification', () => {
+    expect(() => validateNotification(null as unknown as InfoNotification)).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('rejects an undefined notification', () => {
+    expect(() => validateNotification(undefined as unknown as InfoNotification)).toThrow(
+      NotificationValidationError
+    );
+  });
+
   it('accepts a minimal valid notification', () => {
     expect(() => validateNotification(baseInfo())).not.toThrow();
   });
@@ -210,14 +224,29 @@ describe('validateNotification: kind: info', () => {
     ).not.toThrow();
   });
 
-  it.each(['javascript:alert(1)', 'data:text/html,x', 'vbscript:msgbox(1)', 'not a url'])(
-    'rejects an unsafe link href: %s',
-    (href) => {
-      expect(() => validateNotification(baseInfo({ link: { href, label: 'Open' } }))).toThrow(
-        NotificationValidationError
-      );
-    }
-  );
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,x',
+    'vbscript:msgbox(1)',
+    'not a url',
+    '//evil.com/path',
+    '///evil.com',
+    '/\\evil.com',
+    '/\\/evil.com',
+    '/\t/evil.com',
+    '/\n/evil.com',
+    '/\r/evil.com',
+  ])('rejects an unsafe link href: %s', (href) => {
+    expect(() =>
+      validateNotification(baseInfo({ link: { href, label: 'Open' } }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a null link (non-TS caller)', () => {
+    expect(() =>
+      validateNotification(baseInfo({ link: null as unknown as InfoNotification['link'] }))
+    ).toThrow(NotificationValidationError);
+  });
 
   it('rejects a link.href that is not a string (non-TS caller)', () => {
     expect(() =>
@@ -244,6 +273,66 @@ describe('validateNotification: kind: info', () => {
   it('rejects a link label over 80 characters', () => {
     expect(() =>
       validateNotification(baseInfo({ link: { href: '/x', label: 'x'.repeat(81) } }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('accepts a valid icon', () => {
+    expect(() => validateNotification(baseInfo({ icon: 'bell' }))).not.toThrow();
+  });
+
+  it('rejects a non-string icon', () => {
+    expect(() =>
+      validateNotification(baseInfo({ icon: 42 as unknown as string }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an icon over 200 characters', () => {
+    expect(() => validateNotification(baseInfo({ icon: 'x'.repeat(201) }))).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('accepts a valid expiresAt', () => {
+    expect(() =>
+      validateNotification(baseInfo({ expiresAt: Date.now() + 1000 }))
+    ).not.toThrow();
+  });
+
+  it('rejects a non-number expiresAt', () => {
+    expect(() =>
+      validateNotification(baseInfo({ expiresAt: 'soon' as unknown as number }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a NaN expiresAt', () => {
+    expect(() => validateNotification(baseInfo({ expiresAt: NaN }))).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an Infinity expiresAt', () => {
+    expect(() => validateNotification(baseInfo({ expiresAt: Infinity }))).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('accepts a valid meta object', () => {
+    expect(() => validateNotification(baseInfo({ meta: { orderId: 'abc123' } }))).not.toThrow();
+  });
+
+  it('rejects a null meta', () => {
+    expect(() =>
+      validateNotification(baseInfo({ meta: null as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an array meta', () => {
+    expect(() =>
+      validateNotification(baseInfo({ meta: [1, 2, 3] as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a primitive meta', () => {
+    expect(() =>
+      validateNotification(baseInfo({ meta: 'x' as unknown as Record<string, unknown> }))
     ).toThrow(NotificationValidationError);
   });
 });
@@ -326,6 +415,16 @@ describe('validateNotification: kind: action', () => {
       validateNotification(baseAction({ context: { expenseId: 'exp_123' } }))
     ).not.toThrow();
   });
+
+  it('rejects a null meta (shared meta check applies to both kinds)', () => {
+    expect(() =>
+      validateNotification(baseAction({ meta: null as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('accepts a valid meta object', () => {
+    expect(() => validateNotification(baseAction({ meta: { source: 'expenses' } }))).not.toThrow();
+  });
 });
 ```
 
@@ -336,6 +435,8 @@ Expected: FAIL — `kind: 'action'` cases fail because `validateNotification` do
 
 - [ ] **Step 3: Rewrite `notification.ts` to validate both kinds**
 
+**⚠️ Base state note (see the callout above Step 1):** the version below is built on top of the actual current `packages/core/src/notification.ts` — it preserves the top-level `null`/non-object guard, the exported `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH` constants, `MAX_ICON_LENGTH`, the corrected `isSafeLinkHref()` (resolve-and-compare-origin against `SAFE_LINK_BASE`), and the `icon`/`expiresAt`/`meta` checks NOT-37's fix round added — none of that is this plan's own work, and none of it should be lost. This step's only actual additions are: `MAX_ACTIONS`/`ACTION_STYLES`, the `kind === 'action'` branch, `validateActions()`, and moving `meta` validation to run for both kinds (`ActionNotification` has an optional `meta` field too, per its type in Task 1's `types.ts` changes above) while `severity`/`link`/`icon` stay `kind: 'info'`-only (the spec's `ActionNotification` type has none of those three fields).
+
 Replace the full contents of `packages/core/src/notification.ts`:
 
 ```ts
@@ -344,16 +445,26 @@ import type { Notification } from './types';
 /** Thrown by `validateNotification()` — exported so apps can `instanceof`-check it apart from other errors a `notify()` call might reject with. */
 export class NotificationValidationError extends Error {}
 
-const MAX_TITLE_LENGTH = 120;
-const MAX_BODY_LENGTH = 500;
-const MAX_LINK_LABEL_LENGTH = 80;
-const MAX_ACTIONS = 5;
+export const MAX_TITLE_LENGTH = 120;
+export const MAX_BODY_LENGTH = 500;
+export const MAX_LINK_LABEL_LENGTH = 80;
+export const MAX_ACTIONS = 5;
+const MAX_ICON_LENGTH = 200;
 const SEVERITIES = new Set(['info', 'success', 'warning', 'error']);
 const ACTION_STYLES = new Set(['primary', 'danger', 'default']);
 
+const SAFE_LINK_BASE = 'https://netifly.invalid';
+
 function isSafeLinkHref(href: string): boolean {
+  // A relative href must still resolve to the base origin — this is what
+  // rejects //host, /\host, and the tab/newline variants the URL parser
+  // strips before parsing.
   if (href.startsWith('/')) {
-    return true;
+    try {
+      return new URL(href, SAFE_LINK_BASE).origin === SAFE_LINK_BASE;
+    } catch {
+      return false;
+    }
   }
   try {
     const url = new URL(href);
@@ -379,32 +490,64 @@ function validateTitleAndBody(notification: Notification): void {
   }
 }
 
-function validateSeverity(notification: Notification): void {
+function validateMeta(notification: Notification): void {
+  const meta = (notification as { meta?: unknown }).meta;
+  if (meta === undefined) {
+    return;
+  }
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    throw new NotificationValidationError(
+      `Netifly: notify() meta must be a plain object, got ${JSON.stringify(meta)}`
+    );
+  }
+}
+
+function validateInfoOnlyFields(notification: Notification): void {
   const severity = (notification as { severity?: unknown }).severity;
   if (severity !== undefined && !SEVERITIES.has(severity as string)) {
     throw new NotificationValidationError(
       `Netifly: notify() severity must be one of 'info' | 'success' | 'warning' | 'error', got ${JSON.stringify(severity)}`
     );
   }
-}
 
-function validateLink(notification: Notification): void {
   const link = (notification as { link?: unknown }).link;
-  if (link === undefined) {
-    return;
-  }
-  const href = (link as { href?: unknown }).href;
-  const label = (link as { label?: unknown }).label;
+  if (link !== undefined) {
+    if (link === null || typeof link !== 'object') {
+      throw new NotificationValidationError(
+        `Netifly: notify() link must be an object, got ${JSON.stringify(link)}`
+      );
+    }
+    const href = (link as { href?: unknown }).href;
+    const label = (link as { label?: unknown }).label;
 
-  if (typeof href !== 'string' || !isSafeLinkHref(href)) {
-    throw new NotificationValidationError(
-      `Netifly: notify() link.href must be a relative path or an http(s) URL, got ${JSON.stringify(href)}`
-    );
+    if (typeof href !== 'string' || !isSafeLinkHref(href)) {
+      throw new NotificationValidationError(
+        `Netifly: notify() link.href must be a relative path or an http(s) URL, got ${JSON.stringify(href)}`
+      );
+    }
+    if (typeof label !== 'string' || label.trim().length === 0 || label.length > MAX_LINK_LABEL_LENGTH) {
+      throw new NotificationValidationError(
+        `Netifly: notify() link.label is required and must be at most ${MAX_LINK_LABEL_LENGTH} characters`
+      );
+    }
   }
-  if (typeof label !== 'string' || label.trim().length === 0 || label.length > MAX_LINK_LABEL_LENGTH) {
-    throw new NotificationValidationError(
-      `Netifly: notify() link.label is required and must be at most ${MAX_LINK_LABEL_LENGTH} characters`
-    );
+
+  const icon = (notification as { icon?: unknown }).icon;
+  if (icon !== undefined) {
+    if (typeof icon !== 'string' || icon.length > MAX_ICON_LENGTH) {
+      throw new NotificationValidationError(
+        `Netifly: notify() icon must be a string of at most ${MAX_ICON_LENGTH} characters`
+      );
+    }
+  }
+
+  const expiresAt = (notification as { expiresAt?: unknown }).expiresAt;
+  if (expiresAt !== undefined) {
+    if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
+      throw new NotificationValidationError(
+        `Netifly: notify() expiresAt must be a finite number, got ${JSON.stringify(expiresAt)}`
+      );
+    }
   }
 }
 
@@ -441,7 +584,7 @@ function validateActions(notification: Notification): void {
   }
 
   const expiresAt = (notification as { expiresAt?: unknown }).expiresAt;
-  if (typeof expiresAt !== 'number' || expiresAt <= Date.now()) {
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
     throw new NotificationValidationError(
       "Netifly: notify() kind:'action' requires expiresAt to be a timestamp in the future"
     );
@@ -456,6 +599,10 @@ function validateActions(notification: Notification): void {
  * `NotificationValidationError` on the first failure.
  */
 export function validateNotification(notification: Notification): void {
+  if (notification === null || typeof notification !== 'object') {
+    throw new NotificationValidationError('Netifly: notify() requires a notification object');
+  }
+
   const kind = (notification as { kind?: unknown }).kind;
   if (kind !== 'info' && kind !== 'action') {
     throw new NotificationValidationError(
@@ -464,10 +611,10 @@ export function validateNotification(notification: Notification): void {
   }
 
   validateTitleAndBody(notification);
+  validateMeta(notification);
 
   if (kind === 'info') {
-    validateSeverity(notification);
-    validateLink(notification);
+    validateInfoOnlyFields(notification);
     return;
   }
 
