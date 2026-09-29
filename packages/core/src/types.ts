@@ -61,6 +61,16 @@ export interface NetiflyTransport {
   publish(userId: UserId, message: string): Promise<{ receivers: number }>;
   /** Batched presence check — `isOnline`/`whoIsOnline` both route through this. Resolves `{}` for an empty array. */
   receivers(userIds: UserId[]): Promise<Record<UserId, number>>;
+  /**
+   * Atomically claims `key` for `ttlSeconds`: the first caller to succeed
+   * gets `true`; every other caller (same or a different transport
+   * instance/process) gets `false` until the claim expires. `key` is an
+   * opaque caller-chosen string — this method assigns it no structure or
+   * namespace of its own, same as `userId` elsewhere on this interface.
+   * Introduced for actionable notifications' exactly-once "answered" lock
+   * (NOT-38 spec §6), but not itself specific to that use.
+   */
+  claim(key: string, ttlSeconds: number): Promise<boolean>;
   /** Registers the single callback invoked for every message this transport receives. */
   onMessage(cb: (userId: UserId, message: string) => void): void;
   /** Registers the single callback invoked for background/connection errors. */

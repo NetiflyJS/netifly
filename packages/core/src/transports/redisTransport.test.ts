@@ -118,6 +118,17 @@ describe('redisTransport', () => {
     ).resolves.toEqual({ 'redisTransport-presence-namespaced': 1 });
   });
 
+  it('claim() is namespace-aware, matching subscribe/unsubscribe/publish/receivers', async () => {
+    const namespacedA = create({ namespace: 'redisTransport-claim-tenant-a' });
+    const defaultTransport = create();
+
+    const a = await namespacedA.claim('redisTransport-claim-shared', 60);
+    const b = await defaultTransport.claim('redisTransport-claim-shared', 60);
+
+    expect(a).toBe(true);
+    expect(b).toBe(true); // different namespace — does not contend with `a`'s claim
+  });
+
   it('surfaces connection errors via onError instead of throwing', async () => {
     const onError = jest.fn();
     const transport = redisTransport('redis://127.0.0.1:1');
