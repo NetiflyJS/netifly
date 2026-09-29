@@ -236,16 +236,41 @@ export interface InfoNotification {
   meta?: Record<string, unknown>;
 }
 
-/**
- * The shape `notify()`/`notifyOr()` accept. Currently just `InfoNotification`
- * — widened to include an `ActionNotification` variant by a later change
- * (NOT-38), which is why this is a type alias and not `InfoNotification`
- * directly at every call site.
- */
-export type Notification = InfoNotification;
+export interface NotificationAction {
+  id: string;
+  label: string;
+  style?: 'primary' | 'danger' | 'default';
+  input?: { type: 'text'; placeholder?: string };
+}
 
-/** What a client actually receives on the wire for a notify() call. */
-export type WireNotification = Notification;
+export interface ActionNotification {
+  kind: 'action';
+  title: string;
+  body: string;
+  actions: NotificationAction[]; // 1..5, ids unique — see notification.ts
+  expiresAt: number; // required — bounds the signed token's validity and the Redis answered-lock TTL
+  context?: Record<string, unknown>; // signed into each action's token; never a plain wire field, see actionToken.ts
+  meta?: Record<string, unknown>;
+}
+
+/** The shape `notify()`/`notifyOr()` accept. */
+export type Notification = InfoNotification | ActionNotification;
+
+/** What a client actually receives on the wire — action notifications carry a signed, opaque token per action instead of raw context. */
+export type WireNotification =
+  | InfoNotification
+  | (Omit<ActionNotification, 'actions' | 'context'> & {
+      actions: (NotificationAction & { token: string })[];
+    });
+
+/** Payload for `NetiflyInstance.on('action', ...)` — an answered action notification. */
+export interface ActionInfo {
+  userId: UserId;
+  notificationId: string;
+  actionId: string;
+  input?: unknown;
+  context?: Record<string, unknown>;
+}
 
 export interface NetiflyInstance<Events extends EventMap = EventMap> {
   send<T>(userId: UserId, payload: T): Promise<SendResult>;
@@ -277,6 +302,10 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   on(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
   on(event: 'response', listener: (info: ResponseInfo) => void): this;
   on(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  on(
+    event: 'action',
+    listener: (info: ActionInfo) => void
+  ): this;
   on(event: 'sent', listener: (info: SentInfo) => void): this;
   once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
@@ -285,6 +314,10 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   once(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
   once(event: 'response', listener: (info: ResponseInfo) => void): this;
   once(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  once(
+    event: 'action',
+    listener: (info: ActionInfo) => void
+  ): this;
   once(event: 'sent', listener: (info: SentInfo) => void): this;
   close(options?: CloseOptions): Promise<void>;
   /**
