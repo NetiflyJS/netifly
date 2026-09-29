@@ -101,7 +101,12 @@ describe('validateNotification', () => {
     'vbscript:msgbox(1)',
     'not a url',
     '//evil.com/path',
-    '///evil.com'
+    '///evil.com',
+    '/\\evil.com',
+    '/\\/evil.com',
+    '/\t/evil.com',
+    '/\n/evil.com',
+    '/\r/evil.com'
   ])('rejects an unsafe link href: %s', (href) => {
     expect(() =>
       validateNotification(baseNotification({ link: { href, label: 'Open' } }))
@@ -139,6 +144,72 @@ describe('validateNotification', () => {
   it('rejects a link label over 80 characters', () => {
     expect(() =>
       validateNotification(baseNotification({ link: { href: '/x', label: 'x'.repeat(81) } }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('accepts a valid icon', () => {
+    expect(() => validateNotification(baseNotification({ icon: 'bell' }))).not.toThrow();
+  });
+
+  it('rejects a non-string icon', () => {
+    expect(() =>
+      validateNotification(baseNotification({ icon: 42 as unknown as string }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an icon over 200 characters', () => {
+    expect(() =>
+      validateNotification(baseNotification({ icon: 'x'.repeat(201) }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('accepts a valid expiresAt', () => {
+    expect(() =>
+      validateNotification(baseNotification({ expiresAt: Date.now() + 1000 }))
+    ).not.toThrow();
+  });
+
+  it('rejects a non-number expiresAt', () => {
+    expect(() =>
+      validateNotification(baseNotification({ expiresAt: 'soon' as unknown as number }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a NaN expiresAt', () => {
+    expect(() => validateNotification(baseNotification({ expiresAt: NaN }))).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('rejects an Infinity expiresAt', () => {
+    expect(() => validateNotification(baseNotification({ expiresAt: Infinity }))).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('accepts a valid meta object', () => {
+    expect(() =>
+      validateNotification(baseNotification({ meta: { orderId: 'abc123' } }))
+    ).not.toThrow();
+  });
+
+  it('rejects a null meta', () => {
+    expect(() =>
+      validateNotification(baseNotification({ meta: null as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an array meta', () => {
+    expect(() =>
+      validateNotification(
+        baseNotification({ meta: [1, 2, 3] as unknown as Record<string, unknown> })
+      )
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a primitive meta', () => {
+    expect(() =>
+      validateNotification(baseNotification({ meta: 'x' as unknown as Record<string, unknown> }))
     ).toThrow(NotificationValidationError);
   });
 });

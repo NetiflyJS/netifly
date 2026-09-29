@@ -3,21 +3,25 @@ import type { Notification } from './types';
 /** Thrown by `validateNotification()` — exported so apps can `instanceof`-check it apart from other errors a `notify()` call might reject with. */
 export class NotificationValidationError extends Error {}
 
-const MAX_TITLE_LENGTH = 120;
-const MAX_BODY_LENGTH = 500;
-const MAX_LINK_LABEL_LENGTH = 80;
+export const MAX_TITLE_LENGTH = 120;
+export const MAX_BODY_LENGTH = 500;
+export const MAX_LINK_LABEL_LENGTH = 80;
+const MAX_ICON_LENGTH = 200;
 const SEVERITIES = new Set(['info', 'success', 'warning', 'error']);
 
+const SAFE_LINK_BASE = 'https://netifly.invalid';
+
 function isSafeLinkHref(href: string): boolean {
-  // Reject protocol-relative URLs (//host/path), which browsers resolve as absolute cross-origin URLs
-  if (href.startsWith('//')) {
-    return false;
-  }
-  // Accept relative paths starting with exactly one /
+  // A relative href must still resolve to the base origin — this is what
+  // rejects //host, /\host, and the tab/newline variants the URL parser
+  // strips before parsing.
   if (href.startsWith('/')) {
-    return true;
+    try {
+      return new URL(href, SAFE_LINK_BASE).origin === SAFE_LINK_BASE;
+    } catch {
+      return false;
+    }
   }
-  // Accept http(s) URLs
   try {
     const url = new URL(href);
     return url.protocol === 'http:' || url.protocol === 'https:';
@@ -84,6 +88,33 @@ export function validateNotification(notification: Notification): void {
     if (typeof label !== 'string' || label.trim().length === 0 || label.length > MAX_LINK_LABEL_LENGTH) {
       throw new NotificationValidationError(
         `Netifly: notify() link.label is required and must be at most ${MAX_LINK_LABEL_LENGTH} characters`
+      );
+    }
+  }
+
+  const icon = (notification as { icon?: unknown }).icon;
+  if (icon !== undefined) {
+    if (typeof icon !== 'string' || icon.length > MAX_ICON_LENGTH) {
+      throw new NotificationValidationError(
+        `Netifly: notify() icon must be a string of at most ${MAX_ICON_LENGTH} characters`
+      );
+    }
+  }
+
+  const expiresAt = (notification as { expiresAt?: unknown }).expiresAt;
+  if (expiresAt !== undefined) {
+    if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
+      throw new NotificationValidationError(
+        `Netifly: notify() expiresAt must be a finite number, got ${JSON.stringify(expiresAt)}`
+      );
+    }
+  }
+
+  const meta = (notification as { meta?: unknown }).meta;
+  if (meta !== undefined) {
+    if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+      throw new NotificationValidationError(
+        `Netifly: notify() meta must be a plain object, got ${JSON.stringify(meta)}`
       );
     }
   }
