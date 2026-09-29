@@ -333,7 +333,7 @@ Expected: FAIL — `Cannot find module './memoryTransport'` / `'./transport.cont
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cd packages/core && npx jest transports/memoryTransport.test.ts`
-Expected: PASS (all cases, including the 8 contract-suite cases run under the `memoryTransport transport contract` describe block)
+Expected: PASS (all cases, including the 7 contract-suite cases run under the `memoryTransport transport contract` describe block)
 
 - [ ] **Step 7: Commit**
 
@@ -954,7 +954,7 @@ to:
 - [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `cd packages/core && npx jest transports/redisTransport.test.ts`
-Expected: PASS (4 `channelName` tests + 8 contract-suite tests + 6 Redis-specific tests)
+Expected: PASS (4 `channelName` tests + 7 contract-suite tests + 6 Redis-specific tests)
 
 Also run the full suite once here to confirm nothing else broke from the delete/rename:
 
