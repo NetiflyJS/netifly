@@ -10,6 +10,7 @@ import { RefCountedTransport } from './transports/refCountedTransport';
 import { startHeartbeat } from './heartbeat';
 import { parseInboundFrame } from './inboundFrame';
 import { TokenBucket } from './rateLimiter';
+import { validateNotification } from './notification';
 import { ENVELOPE_VERSION } from './types';
 import type {
   AckInfo,
@@ -21,6 +22,7 @@ import type {
   MalformedFrameInfo,
   NetiflyInstance,
   NetiflyTransport,
+  Notification,
   RejectInfo,
   ResponseInfo,
   SendOrOptions,
@@ -391,6 +393,26 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     return result;
   }
 
+  async notify(userId: UserId, notification: Notification): Promise<SendResult> {
+    if (this.closed) {
+      throw new Error('Netifly: cannot send after close()');
+    }
+    validateNotification(notification);
+    return this.publishEnvelope(userId, 'notification', notification);
+  }
+
+  async notifyOr(
+    userId: UserId,
+    notification: Notification,
+    options: SendOrOptions
+  ): Promise<SendResult> {
+    const result = await this.notify(userId, notification);
+    if (!result.delivered) {
+      await options.offline();
+    }
+    return result;
+  }
+
   private async sendInternal<T>(userId: UserId, rest: [T] | [string, T]): Promise<SendResult> {
     if (this.closed) {
       throw new Error('Netifly: cannot send after close()');
@@ -406,6 +428,16 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     // caller invoked `send()` itself). At runtime this is exactly the actual
     // `(type, data)` pair being sent.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
+    return this.publishEnvelope(userId, type, data);
+  }
+
+  // Shared by sendInternal() and notify(): builds the envelope, fires
+  // 'sent', serializes it, and publishes via the transport. Deliberately
+  // does NOT run `this.validate` — notify() calls this directly, after its
+  // own validateNotification(), and must never run the app's Events-typed
+  // validate hook for a 'notification' type that was never a member of
+  // that map (see NOT-37 spec §4).
+  private async publishEnvelope<T>(userId: UserId, type: string, data: T): Promise<SendResult> {
     const envelope = this.buildEnvelope(type, data);
     this.emit('sent', {
       userId,

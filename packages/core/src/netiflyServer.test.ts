@@ -8,6 +8,7 @@ import { ConnectionRegistry } from './connectionRegistry';
 import { RefCountedTransport } from './transports/refCountedTransport';
 import { channelName } from './transports/redisTransport';
 import type { CloseOptions, CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
+import { NotificationValidationError } from './notification';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -1484,5 +1485,95 @@ describe('createNetifly', () => {
     await wait(100);
 
     expect(calls).toHaveLength(1);
+  });
+
+  describe('notify()', () => {
+    it('publishes a valid info notification and resolves with SendResult', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-user');
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      const result = await server.netifly.notify('netiflyServer-notify-user', {
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Your report has finished generating.',
+      });
+
+      expect(result).toEqual({ delivered: true, instances: 1 });
+      const envelope = await notificationPromise;
+      expect(envelope.data).toEqual({
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Your report has finished generating.',
+      });
+    });
+
+    it('rejects an invalid notification without publishing anything', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-invalid');
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const messages: unknown[] = [];
+      ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
+
+      await expect(
+        server.netifly.notify('netiflyServer-notify-invalid', { kind: 'info', title: '', body: 'x' })
+      ).rejects.toThrow(NotificationValidationError);
+
+      await wait(50);
+      expect(messages).toHaveLength(0);
+    });
+
+    it('does not run the app-level validate hook for notify()', async () => {
+      const validate = jest.fn();
+      const server = await startTestServer(() => 'netiflyServer-notify-no-app-validate', { validate });
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      await server.netifly.notify('netiflyServer-notify-no-app-validate', {
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Done.',
+      });
+      expect(validate).not.toHaveBeenCalled();
+    });
+
+    it('notifyOr() calls offline() when nobody is connected', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-anyone');
+      servers.push(server);
+
+      const offline = jest.fn();
+      const result = await server.netifly.notifyOr(
+        'netiflyServer-notify-nobody-home',
+        { kind: 'info', title: 'Export ready', body: 'Done.' },
+        { offline }
+      );
+
+      expect(result.delivered).toBe(false);
+      expect(offline).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws after close(), same as send()', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-after-close');
+      await server.close();
+
+      await expect(
+        server.netifly.notify('netiflyServer-notify-after-close', {
+          kind: 'info',
+          title: 'Export ready',
+          body: 'Done.',
+        })
+      ).rejects.toThrow('Netifly: cannot send after close()');
+    });
   });
 });
