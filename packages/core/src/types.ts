@@ -218,6 +218,35 @@ export interface SendOrOptions {
   offline: () => void | Promise<void>;
 }
 
+export interface NotificationLink {
+  href: string;
+  label: string;
+}
+
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
+
+export interface InfoNotification {
+  kind: 'info';
+  title: string;
+  body: string;
+  severity?: NotificationSeverity;
+  link?: NotificationLink;
+  icon?: string;
+  expiresAt?: number;
+  meta?: Record<string, unknown>;
+}
+
+/**
+ * The shape `notify()`/`notifyOr()` accept. Currently just `InfoNotification`
+ * — widened to include an `ActionNotification` variant by a later change
+ * (NOT-38), which is why this is a type alias and not `InfoNotification`
+ * directly at every call site.
+ */
+export type Notification = InfoNotification;
+
+/** What a client actually receives on the wire for a notify() call. */
+export type WireNotification = Notification;
+
 export interface NetiflyInstance<Events extends EventMap = EventMap> {
   send<T>(userId: UserId, payload: T): Promise<SendResult>;
   send<K extends keyof Events & string>(userId: UserId, type: K, data: Events[K]): Promise<SendResult>;
