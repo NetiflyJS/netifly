@@ -27,7 +27,7 @@ const IOREDIS_DEFAULT_DISCONNECT_TIMEOUT_MS = 2000;
  * connection that closes normally.
  *
  * For a connection that never established a healthy socket (e.g. still
- * retrying against an unreachable host — see `redisRouter.test.ts`'s
+ * retrying against an unreachable host — see `transports/redisTransport.test.ts`'s
  * "surfaces connection errors" case), the underlying stream may not be able
  * to end gracefully at all, and ioredis's own fallback timer is what
  * eventually force-destroys it — `'end'` only fires once that happens. This

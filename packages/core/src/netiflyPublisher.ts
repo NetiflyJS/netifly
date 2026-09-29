@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import Redis from 'ioredis';
 import { monotonicFactory } from 'ulid';
 import { disconnectRedis } from './redisDisconnect';
-import { channelName } from './redisRouter';
+import { channelName } from './transports/redisTransport';
 import { ENVELOPE_VERSION } from './types';
 import type {
   CreateNetiflyPublisherOptions,
