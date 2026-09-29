@@ -506,7 +506,7 @@ describe('createNetifly', () => {
   // a live connection for that user — this is what lets send() tell the
   // caller, at publish time, whether the user was reachable. Asserting
   // `instances` is exactly 1 here (not just >= 1) is deliberate and
-  // deterministic: RedisRouter ref-counts subscriptions per userId, so one
+  // deterministic: RefCountedTransport ref-counts subscriptions per userId, so one
   // instance only ever issues a single SUBSCRIBE for a user regardless of
   // how many local WebSocket connections that user has open (see NOT-5) —
   // "instances" counts subscribed server processes, not sockets.
@@ -772,7 +772,7 @@ describe('createNetifly', () => {
   // and starts its own SUBSCRIBE before A's is observed to complete. A's
   // post-await cleanup must not tear down B's subscription.
   //
-  // RedisRouter#subscribe is wrapped rather than the raw ioredis client:
+  // RefCountedTransport#subscribe is wrapped rather than the raw ioredis client:
   // the fix makes an overlapping subscribe() resolve without ever touching
   // Redis (it just bumps a ref count), so counting real ioredis calls can't
   // distinguish "A's call" from "B's call" once the fix is in place. Forwarding
@@ -918,7 +918,7 @@ describe('createNetifly', () => {
   // (OS socket buffers are large, so it can take a while, if it happens at
   // all, before the test's timeout). Instead we spy on
   // ConnectionRegistry#add (the same pattern the NOT-5 race test above uses
-  // for RedisRouter#subscribe) purely to capture a reference to the exact
+  // for RefCountedTransport#subscribe) purely to capture a reference to the exact
   // server-side `ws` instance registered for the "stalled" client, then
   // shadow `bufferedAmount` with an own property on that single instance —
   // every other instance, including the healthy second connection's ws,

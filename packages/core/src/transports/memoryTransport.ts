@@ -27,7 +27,13 @@ export function memoryTransport(): NetiflyTransport {
         // code/tests written against one transport must not accidentally
         // depend on timing behavior that only this transport happens to
         // provide (NOT-20 design spec §8).
-        queueMicrotask(() => onMessageCb?.(userId, message));
+        queueMicrotask(() => {
+          try {
+            onMessageCb?.(userId, message);
+          } catch (error) {
+            onErrorCb?.(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
       }
       return { receivers };
     },

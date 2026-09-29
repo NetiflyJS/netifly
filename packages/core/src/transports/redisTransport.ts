@@ -54,6 +54,7 @@ export class RedisTransportImpl implements NetiflyTransport {
   private readonly subscriber: Redis;
   private readonly namespace: string | undefined;
   private onMessageCb: ((userId: UserId, message: string) => void) | undefined;
+  private onErrorCb: ((error: Error) => void) | undefined;
 
   constructor(url: string, options: RedisTransportOptions = {}) {
     this.namespace = options.namespace;
@@ -73,6 +74,12 @@ export class RedisTransportImpl implements NetiflyTransport {
         this.onMessageCb?.(userId, message);
       }
     });
+
+    // Single stable dispatcher attached once, here — matches onMessage's
+    // single-slot pattern instead of accumulating a new listener on
+    // publisher/subscriber every time onError(cb) is called.
+    this.publisher.on('error', (error) => this.onErrorCb?.(error));
+    this.subscriber.on('error', (error) => this.onErrorCb?.(error));
   }
 
   private userIdFromChannel(channel: string): UserId | null {
@@ -126,8 +133,7 @@ export class RedisTransportImpl implements NetiflyTransport {
   }
 
   onError(cb: (error: Error) => void): void {
-    this.publisher.on('error', cb);
-    this.subscriber.on('error', cb);
+    this.onErrorCb = cb;
   }
 
   async close(): Promise<void> {

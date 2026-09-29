@@ -202,7 +202,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
   //
   // Every connection subscribes and unsubscribes for itself exactly once,
   // regardless of how many other connections exist for the same user:
-  // RedisRouter ref-counts subscriptions per userId, so overlapping
+  // RefCountedTransport ref-counts subscriptions per userId, so overlapping
   // connections can never unsubscribe out from under one another (NOT-5).
   // ConnectionRegistry state is deliberately not consulted here — it only
   // reflects fully-registered connections, not ones still mid-subscribe.
