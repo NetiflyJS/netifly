@@ -11,7 +11,8 @@
 | --- | --- | --- |
 | `server` | ✅ | `http.Server` to attach the WebSocket upgrade handler to |
 | `resolveUserId` | ✅ | `(req) => userId \| falsy`, sync or async |
-| `redisUrl` | — | falls back to `process.env.REDIS_URL`; one of the two is required |
+| `redisUrl` | — | falls back to `process.env.REDIS_URL`; ignored if `transport` is passed |
+| `transport` | — | `NetiflyTransport` — `redisTransport(url, { namespace })` (default) or `memoryTransport()` for zero-Redis local dev/tests; recommended for running your own app's test suite without a real Redis instance. See the root README's [Transport](https://github.com/NetiflyJS/netifly#-transport) section |
 | `path` | — | WebSocket upgrade path, default `/netifly` |
 | `allowedOrigins` | — | see [Security](../security.md) |
 | `maxPayload`, `maxBufferedBytes`, `maxConnectionsPerUser` | — | see [Security](../security.md) |

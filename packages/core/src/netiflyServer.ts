@@ -5,7 +5,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { RawData } from 'ws';
 import { monotonicFactory } from 'ulid';
 import { ConnectionRegistry } from './connectionRegistry';
-import { RedisRouter } from './redisRouter';
+import { redisTransport } from './transports/redisTransport';
+import { RefCountedTransport } from './transports/refCountedTransport';
 import { startHeartbeat } from './heartbeat';
 import { parseInboundFrame } from './inboundFrame';
 import { TokenBucket } from './rateLimiter';
@@ -19,6 +20,7 @@ import type {
   EventMap,
   MalformedFrameInfo,
   NetiflyInstance,
+  NetiflyTransport,
   RejectInfo,
   ResponseInfo,
   SendOrOptions,
@@ -50,7 +52,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
 {
   private readonly wss: WebSocketServer;
   private readonly registry: ConnectionRegistry<WebSocket>;
-  private readonly router: RedisRouter;
+  private readonly transport: NetiflyTransport;
   private readonly resolveUserId: CreateNetiflyOptions<Events>['resolveUserId'];
   private readonly path: string;
   private readonly allowedOrigins: AllowedOrigins | undefined;
@@ -77,19 +79,28 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
 
     this.registry = new ConnectionRegistry<WebSocket>({});
 
-    const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
-    if (!redisUrl) {
+    if (options.transport && options.namespace !== undefined) {
       throw new Error(
-        'Netifly: no redisUrl provided and REDIS_URL is not set. Pass { redisUrl } to createNetifly() or set the REDIS_URL environment variable.'
+        'Netifly: pass `namespace` to redisTransport() directly when using an explicit `transport` option — ' +
+          'createNetifly({ namespace }) only applies to the redisUrl-built default transport.'
       );
     }
 
-    this.router = new RedisRouter({
-      redisUrl,
-      onMessage: (userId, rawMessage) => this.deliverLocally(userId, rawMessage),
-      onError: (error) => this.emitError(error),
-      namespace: options.namespace,
-    });
+    let raw: NetiflyTransport;
+    if (options.transport) {
+      raw = options.transport;
+    } else {
+      const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
+      if (!redisUrl) {
+        throw new Error(
+          'Netifly: no redisUrl provided and REDIS_URL is not set. Pass { redisUrl } to createNetifly() or set the REDIS_URL environment variable.'
+        );
+      }
+      raw = redisTransport(redisUrl, { namespace: options.namespace });
+    }
+    this.transport = new RefCountedTransport(raw);
+    this.transport.onMessage((userId, message) => this.deliverLocally(userId, message));
+    this.transport.onError((error) => this.emitError(error));
 
     this.wss = new WebSocketServer({ noServer: true, maxPayload: this.maxPayload });
     this.heartbeatTimer = startHeartbeat({
@@ -191,7 +202,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
   //
   // Every connection subscribes and unsubscribes for itself exactly once,
   // regardless of how many other connections exist for the same user:
-  // RedisRouter ref-counts subscriptions per userId, so overlapping
+  // RefCountedTransport ref-counts subscriptions per userId, so overlapping
   // connections can never unsubscribe out from under one another (NOT-5).
   // ConnectionRegistry state is deliberately not consulted here — it only
   // reflects fully-registered connections, not ones still mid-subscribe.
@@ -211,12 +222,12 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       if (subscribed) {
         subscribed = false;
         this.emit('disconnect', userId);
-        this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
+        this.transport.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
       }
     });
 
     try {
-      await this.router.subscribe(userId);
+      await this.transport.subscribe(userId);
     } catch (error) {
       this.emitError(error);
       ws.terminate();
@@ -227,7 +238,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       // Closed while the SUBSCRIBE was in flight. The 'close' listener above
       // already ran (before `subscribed` was set, so it didn't pair an
       // unsubscribe) — do it here instead.
-      this.router.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
+      this.transport.unsubscribe(userId).catch((error: unknown) => this.emitError(error));
       return;
     }
 
@@ -270,7 +281,8 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     }
 
     const relayEnvelope = this.buildEnvelope(relayType, relayData);
-    this.router.publish(userId, relayEnvelope).catch((error: unknown) => this.emitError(error));
+    const relayMessage = this.serializeEnvelope(userId, relayEnvelope);
+    this.transport.publish(userId, relayMessage).catch((error: unknown) => this.emitError(error));
   }
 
   private emitMalformedFrame(info: MalformedFrameInfo): void {
@@ -401,20 +413,33 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       type: envelope.type,
       data: envelope.data,
     } satisfies SentInfo);
-    const instances = await this.router.publish(userId, envelope);
-    return { delivered: instances > 0, instances };
+    const message = this.serializeEnvelope(userId, envelope);
+    const { receivers } = await this.transport.publish(userId, message);
+    return { delivered: receivers > 0, instances: receivers };
   }
 
   private buildEnvelope<T>(type: string, data: T): Envelope<T> {
     return { v: ENVELOPE_VERSION, id: this.ulid(), type, data, ts: Date.now() };
   }
 
+  private serializeEnvelope(userId: UserId, envelope: Envelope<unknown>): string {
+    try {
+      return JSON.stringify(envelope);
+    } catch (error) {
+      const message = `Netifly: payload for user "${userId}" is not JSON-serializable`;
+      const serializationError = new Error(message);
+      (serializationError as Error & { cause?: unknown }).cause = error;
+      throw serializationError;
+    }
+  }
+
   async isOnline(userId: UserId): Promise<boolean> {
-    return (await this.router.numSubscribers(userId)) > 0;
+    const counts = await this.transport.receivers([userId]);
+    return counts[userId] > 0;
   }
 
   async whoIsOnline(userIds: UserId[]): Promise<Record<UserId, boolean>> {
-    const counts = await this.router.numSubscribersMany(userIds);
+    const counts = await this.transport.receivers(userIds);
     const online: Record<UserId, boolean> = {};
     for (const userId of userIds) {
       online[userId] = counts[userId] > 0;
@@ -484,7 +509,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     await new Promise<void>((resolve, reject) => {
       this.wss.close((err) => (err ? reject(err) : resolve()));
     });
-    await this.router.close();
+    await this.transport.close();
     this.registry.clear();
   }
 }

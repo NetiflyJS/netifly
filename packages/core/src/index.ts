@@ -1,5 +1,7 @@
 export { createNetifly } from './netiflyServer';
 export { createNetiflyPublisher } from './netiflyPublisher';
+export { memoryTransport } from './transports/memoryTransport';
+export { redisTransport } from './transports/redisTransport';
 export { ENVELOPE_VERSION } from './types';
 export type {
   AckInfo,
@@ -14,6 +16,7 @@ export type {
   MalformedFrameReason,
   NetiflyInstance,
   NetiflyPublisher,
+  NetiflyTransport,
   RejectInfo,
   ResolveUserId,
   ResponseInfo,
@@ -22,3 +25,4 @@ export type {
   SentInfo,
   UserId,
 } from './types';
+export type { RedisTransportOptions } from './transports/redisTransport';

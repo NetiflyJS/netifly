@@ -216,7 +216,7 @@ describe('createNetiflyPublisher', () => {
     ).resolves.toEqual({ delivered: false, instances: 0 });
   });
 
-  it('rejects a non-serializable payload with the same error RedisRouter.publish gives', async () => {
+  it("rejects a non-serializable payload with the same error netiflyServer's send() path gives", async () => {
     const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
     publishers.push(publisher);
 

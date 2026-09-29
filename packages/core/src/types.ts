@@ -45,10 +45,43 @@ export type AllowedOrigins =
   | ((origin: string | undefined) => boolean)
   | '*';
 
+/**
+ * The contract `createNetifly()` depends on for moving messages between
+ * connections and across server instances. `redisTransport()` and
+ * `memoryTransport()` are the two built-in implementations (see the NOT-20
+ * design spec). `createNetifly()` wraps whichever transport it is given in
+ * an internal ref-counting decorator, so an implementation of this
+ * interface never needs to handle overlapping subscribe()/unsubscribe()
+ * calls for the same userId itself.
+ */
+export interface NetiflyTransport {
+  subscribe(userId: UserId): Promise<void>;
+  unsubscribe(userId: UserId): Promise<void>;
+  /** `message` is always a pre-serialized JSON string — see the NOT-20 design spec §6. */
+  publish(userId: UserId, message: string): Promise<{ receivers: number }>;
+  /** Batched presence check — `isOnline`/`whoIsOnline` both route through this. Resolves `{}` for an empty array. */
+  receivers(userIds: UserId[]): Promise<Record<UserId, number>>;
+  /** Registers the single callback invoked for every message this transport receives. */
+  onMessage(cb: (userId: UserId, message: string) => void): void;
+  /** Registers the single callback invoked for background/connection errors. */
+  onError(cb: (error: Error) => void): void;
+  close(): Promise<void>;
+}
+
 export interface CreateNetiflyOptions<Events extends EventMap = EventMap> {
   server: HttpServer;
   resolveUserId: ResolveUserId;
   redisUrl?: string;
+  /**
+   * The transport used to move messages between connections and across
+   * server instances. Defaults to `redisTransport(redisUrl, { namespace })`
+   * built from `redisUrl`/`REDIS_URL` and `namespace` below. Passing both
+   * `transport` and `namespace` throws synchronously at construction —
+   * `namespace` only has meaning when this package builds the Redis
+   * transport for you; pass it directly to `redisTransport(url, { namespace })`
+   * instead when constructing a transport explicitly.
+   */
+  transport?: NetiflyTransport;
   path?: string;
   allowedOrigins?: AllowedOrigins;
   /**
