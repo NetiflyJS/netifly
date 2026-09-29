@@ -3,6 +3,7 @@ import { expectType, expectError } from 'tsd';
 import {
   createNetifly,
   createNetiflyPublisher,
+  type Notification,
   type SendResult,
 } from '../src/index';
 
@@ -91,3 +92,15 @@ expectType<Promise<SendResult>>(publisher.send(userId, { anything: true }));
 
 const untypedPublisher = createNetiflyPublisher({ redisUrl: 'redis://127.0.0.1:6379' });
 expectType<Promise<SendResult>>(untypedPublisher.send(userId, 'anything', { anything: true }));
+
+// --- notify()/notifyOr(): NOT-37 ---
+
+declare const infoNotification: Notification;
+
+expectType<Promise<SendResult>>(netifly.notify(userId, infoNotification));
+expectType<Promise<SendResult>>(
+  netifly.notifyOr(userId, infoNotification, { offline: () => {} })
+);
+expectType<Promise<SendResult>>(untypedNetifly.notify(userId, infoNotification));
+expectType<Promise<SendResult>>(publisher.notify(userId, infoNotification));
+expectType<Promise<SendResult>>(untypedPublisher.notify(userId, infoNotification));
