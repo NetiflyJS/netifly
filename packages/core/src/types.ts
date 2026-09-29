@@ -72,6 +72,16 @@ export interface CreateNetiflyOptions<Events extends EventMap = EventMap> {
   server: HttpServer;
   resolveUserId: ResolveUserId;
   redisUrl?: string;
+  /**
+   * The transport used to move messages between connections and across
+   * server instances. Defaults to `redisTransport(redisUrl, { namespace })`
+   * built from `redisUrl`/`REDIS_URL` and `namespace` below. Passing both
+   * `transport` and `namespace` throws synchronously at construction —
+   * `namespace` only has meaning when this package builds the Redis
+   * transport for you; pass it directly to `redisTransport(url, { namespace })`
+   * instead when constructing a transport explicitly.
+   */
+  transport?: NetiflyTransport;
   path?: string;
   allowedOrigins?: AllowedOrigins;
   /**

@@ -3,8 +3,10 @@ import type { AddressInfo } from 'node:net';
 import Redis from 'ioredis';
 import WebSocket from 'ws';
 import { createNetifly } from './netiflyServer';
+import { memoryTransport } from './transports/memoryTransport';
 import { ConnectionRegistry } from './connectionRegistry';
-import { RedisRouter, channelName } from './redisRouter';
+import { RefCountedTransport } from './transports/refCountedTransport';
+import { channelName } from './transports/redisTransport';
 import type { CloseOptions, CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
@@ -451,6 +453,54 @@ describe('createNetifly', () => {
     ).resolves.toEqual({ delivered: false, instances: 0 });
   });
 
+  it('throws synchronously when both transport and namespace are passed', () => {
+    const httpServer = http.createServer();
+    expect(() =>
+      createNetifly({
+        server: httpServer,
+        resolveUserId: () => 'x',
+        transport: memoryTransport(),
+        namespace: 'staging',
+      })
+    ).toThrow(/pass .*namespace.* to redisTransport\(\) directly/);
+  });
+
+  // Regression coverage for a test that only ever lived in
+  // redisRouter.test.ts ("rejects a non-serializable payload with a clear
+  // error", testing RedisRouter.publish directly) — deleted in Task 3 since
+  // serialization moved out of the transport and into netiflyServer's own
+  // send() path (see serializeEnvelope, Step 4.6-4.8 below). Re-asserted
+  // here at the level a caller actually observes it.
+  it('rejects a non-serializable payload with a clear error', async () => {
+    const server = await startTestServer(() => 'netiflyServer-circular');
+    servers.push(server);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await expect(server.netifly.send('netiflyServer-circular', circular)).rejects.toThrow(
+      'Netifly: payload for user "netiflyServer-circular" is not JSON-serializable'
+    );
+  });
+
+  it('works end-to-end with an explicit memoryTransport(), with no Redis involved', async () => {
+    const userId = 'netiflyServer-memory-transport';
+    const server = await startTestServer(() => userId, { transport: memoryTransport() });
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    const messagePromise = nextMessage(client);
+    const result = await server.netifly.send(userId, { type: 'x' });
+    const envelope = JSON.parse(await messagePromise);
+
+    expect(result).toEqual({ delivered: true, instances: 1 });
+    expect(envelope.data).toEqual({ type: 'x' });
+    await expect(server.netifly.isOnline(userId)).resolves.toBe(true);
+  });
+
   // NOT-13: PUBLISH's own return value is the number of subscribed
   // receivers, which for Netifly is the number of server instances holding
   // a live connection for that user — this is what lets send() tell the
@@ -732,13 +782,13 @@ describe('createNetifly', () => {
   // test control.
   it('does not lose messages when a second connection for the same user arrives while the first is still subscribing and then closes', async () => {
     const userId = 'netiflyServer-race';
-    const originalSubscribe = RedisRouter.prototype.subscribe;
+    const originalSubscribe = RefCountedTransport.prototype.subscribe;
     const releases: Array<() => void> = [];
     let callIndex = 0;
 
     const subscribeSpy = jest
-      .spyOn(RedisRouter.prototype, 'subscribe')
-      .mockImplementation(function (this: RedisRouter, subscribedUserId: string) {
+      .spyOn(RefCountedTransport.prototype, 'subscribe')
+      .mockImplementation(function (this: RefCountedTransport, subscribedUserId: string) {
         const index = callIndex++;
         const realPromise = originalSubscribe.call(this, subscribedUserId);
         if (index > 1) return realPromise;
