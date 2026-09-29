@@ -282,6 +282,26 @@ Upstash and Redis Cloud free tiers typically give you a single Redis instance, w
 createNetifly({ server, resolveUserId, namespace: 'staging' });
 ```
 
+## 🔌 Transport
+
+`createNetifly()` moves messages between connections — and across server instances, in a multi-instance deployment — through a `NetiflyTransport`. Passing `redisUrl` (or setting `REDIS_URL`) is sugar for building the default one: `redisTransport(redisUrl, { namespace })`. Pass `transport` explicitly for more control, or to use a different implementation entirely:
+
+```ts
+import { createNetifly, redisTransport, memoryTransport } from '@netiflyjs/core';
+
+// Explicit, namespaced Redis transport — identical to the redisUrl/namespace sugar above.
+createNetifly({
+  server,
+  resolveUserId,
+  transport: redisTransport(process.env.REDIS_URL!, { namespace: 'staging' }),
+});
+
+// Local development and tests — no Redis required.
+createNetifly({ server, resolveUserId, transport: memoryTransport() });
+```
+
+`memoryTransport()` is a single-process, dependency-free transport — recommended for running your own app's test suite against Netifly without standing up a real Redis instance. It models exactly one process: it doesn't simulate a multi-instance cluster, so cross-instance behavior (e.g. presence via `isOnline()`/`whoIsOnline()`, or delivery to a connection held by a different server instance) should still be tested against `redisTransport()` if your app depends on it.
+
 ## 🛡️ Security
 
 ### Origin allowlist
@@ -416,14 +436,15 @@ rdb.Publish(context.Background(), fmt.Sprintf("netifly:user:%s", userID), envelo
 | --- | --- | --- | --- |
 | `server` | `http.Server` | ✅ | The server to attach the WebSocket upgrade handler to. |
 | `resolveUserId` | `(req) => string \| null \| undefined \| Promise<...>` | ✅ | Identifies the connecting user. Returning a falsy value rejects the connection. |
-| `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — Netifly throws at construction time if neither is set (no default/local fallback). |
+| `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. Ignored if `transport` is passed. One of `redisUrl`/`REDIS_URL`/`transport` **must** be provided — Netifly throws at construction time if none is set (no default/local fallback). |
+| `transport` | `NetiflyTransport` | — | The transport used to move messages between connections and across server instances (see [Transport](#-transport)). Defaults to a Redis transport built from `redisUrl`/`namespace` below. Passing both `transport` and `namespace` throws at construction time. |
 | `path` | `string` | — | WebSocket upgrade path. Defaults to `/netifly`. |
 | `allowedOrigins` | `(string \| RegExp)[] \| ((origin: string \| undefined) => boolean) \| '*'` | — | Controls the CSWSH origin check (see [Security](#-security)). Defaults to same-host only. |
 | `maxPayload` | `number` | — | Max inbound WebSocket frame size, in bytes. Netifly ignores client→server messages, so this just bounds memory/DoS exposure from `ws`'s 100 MiB default. `ws` closes the connection with code `1009` on an oversized frame. Defaults to `4096` (4 KB). |
 | `maxBufferedBytes` | `number` | — | Max bytes allowed in a connection's outbound send buffer (`ws.bufferedAmount`) before it's treated as stalled and shed (see [Limits](#limits)). Defaults to `1_048_576` (1 MB). |
 | `maxConnectionsPerUser` | `number` | — | Max concurrent WebSocket connections for one `userId`, **on this instance** (see [Limits](#limits)). Defaults to `10`. |
 | `maxInboundFramesPerSecond` | `number` | — | Max inbound client frames (ack/read/response — see [Client acks and read state](#client-acks-and-read-state)) accepted per connection, per second, via a per-connection token bucket shared across all three frame kinds. Frames beyond the limit are dropped and counted via `'malformedFrame'` (reason `'rateLimited'`) rather than closing the connection. Defaults to `20`. ⚠️ If a burst of sends to one connection exceeds this within a second, the client's default-on `autoAck` (see below) can itself exceed the budget — the surplus acks are dropped as `'rateLimited'`, and those notifications never get marked delivered. Raise this alongside your peak per-connection send rate. |
-| `namespace` | `string` | — | Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of the default `netifly:user:<id>` — use this when multiple apps/environments share one Redis instance (see [Redis Configuration](#-redis-configuration)). Defaults to unset (no namespace). |
+| `namespace` | `string` | — | Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of the default `netifly:user:<id>` — use this when multiple apps/environments share one Redis instance (see [Redis Configuration](#-redis-configuration)). Only meaningful when building the default Redis transport from `redisUrl`; pass it to `redisTransport(url, { namespace })` directly if you're passing `transport` explicitly. Defaults to unset (no namespace). |
 | `validate` | `(type: K, data: Events[K]) => void` | — | Optional runtime validation hook (see [Typed events](#typed-events)) — e.g. a Zod/Valibot schema lookup. Called with the resolved `(type, data)` pair before every `send()`/`sendOr()` publishes. Throwing aborts the send and propagates out of the call. Defaults to unset (no validation). |
 
 Returns a `NetiflyInstance<Events>`:
