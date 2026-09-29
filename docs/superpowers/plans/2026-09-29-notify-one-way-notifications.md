@@ -438,6 +438,8 @@ Expected: FAIL — `server.netifly.notify is not a function`.
 
 - [ ] **Step 3: Factor out `publishEnvelope()` and implement `notify()`/`notifyOr()`**
 
+**Note on the codebase state this step targets:** `netiflyServer.ts` currently publishes via `this.transport` (a `NetiflyTransport`, from the NOT-20 transport-abstraction refactor) and a `serializeEnvelope()` helper, not the older direct-Redis `this.router` shape — the snippets below match the actual current file.
+
 In `packages/core/src/netiflyServer.ts`, replace the existing `sendInternal` method:
 
 ```ts
@@ -463,8 +465,9 @@ In `packages/core/src/netiflyServer.ts`, replace the existing `sendInternal` met
       type: envelope.type,
       data: envelope.data,
     } satisfies SentInfo);
-    const instances = await this.router.publish(userId, envelope);
-    return { delivered: instances > 0, instances };
+    const message = this.serializeEnvelope(userId, envelope);
+    const { receivers } = await this.transport.publish(userId, message);
+    return { delivered: receivers > 0, instances: receivers };
   }
 ```
 
@@ -490,10 +493,11 @@ with this pair (same behavior for `send()`/`sendOr()`, but the publish/emit half
   }
 
   // Shared by sendInternal() and notify(): builds the envelope, fires
-  // 'sent', and publishes. Deliberately does NOT run `this.validate` —
-  // notify() calls this directly, after its own validateNotification(), and
-  // must never run the app's Events-typed validate hook for a 'notification'
-  // type that was never a member of that map (see NOT-37 spec §4).
+  // 'sent', serializes it, and publishes via the transport. Deliberately
+  // does NOT run `this.validate` — notify() calls this directly, after its
+  // own validateNotification(), and must never run the app's Events-typed
+  // validate hook for a 'notification' type that was never a member of
+  // that map (see NOT-37 spec §4).
   private async publishEnvelope<T>(userId: UserId, type: string, data: T): Promise<SendResult> {
     const envelope = this.buildEnvelope(type, data);
     this.emit('sent', {
@@ -502,10 +506,13 @@ with this pair (same behavior for `send()`/`sendOr()`, but the publish/emit half
       type: envelope.type,
       data: envelope.data,
     } satisfies SentInfo);
-    const instances = await this.router.publish(userId, envelope);
-    return { delivered: instances > 0, instances };
+    const message = this.serializeEnvelope(userId, envelope);
+    const { receivers } = await this.transport.publish(userId, message);
+    return { delivered: receivers > 0, instances: receivers };
   }
 ```
+
+(`buildEnvelope` and `serializeEnvelope` themselves are unchanged by this step — only `sendInternal` is split and `publishEnvelope` is new.)
 
 Then add `notify()`/`notifyOr()` right after the existing `sendOr()` method (before `private async sendInternal`):
 
@@ -537,10 +544,49 @@ Add the new imports at the top of `packages/core/src/netiflyServer.ts`, alongsid
 import { validateNotification } from './notification';
 ```
 
-And add `Notification` to the existing `import type { ... } from './types';` block (alphabetically, after `NetiflyInstance`):
+And add `Notification` to the existing `import type { ... } from './types';` block. The current block (post-NOT-20) is:
 
 ```ts
+import type {
+  AckInfo,
+  AllowedOrigins,
+  CloseOptions,
+  CreateNetiflyOptions,
+  Envelope,
+  EventMap,
+  MalformedFrameInfo,
+  NetiflyInstance,
+  NetiflyTransport,
+  RejectInfo,
+  ResponseInfo,
+  SendOrOptions,
+  SendResult,
+  SentInfo,
+  UserId,
+} from './types';
+```
+
+Add `Notification` alphabetically, after `NetiflyTransport` and before `RejectInfo`:
+
+```ts
+import type {
+  AckInfo,
+  AllowedOrigins,
+  CloseOptions,
+  CreateNetiflyOptions,
+  Envelope,
+  EventMap,
+  MalformedFrameInfo,
+  NetiflyInstance,
+  NetiflyTransport,
   Notification,
+  RejectInfo,
+  ResponseInfo,
+  SendOrOptions,
+  SendResult,
+  SentInfo,
+  UserId,
+} from './types';
 ```
 
 - [ ] **Step 4: Run the tests and verify they pass**
@@ -707,7 +753,7 @@ In `packages/core/src/netiflyPublisher.ts`, replace the existing `send()` method
   }
 ```
 
-Add the new imports at the top of `packages/core/src/netiflyPublisher.ts`, alongside the existing `import { channelName } from './redisRouter';`:
+Add the new imports at the top of `packages/core/src/netiflyPublisher.ts`, alongside the existing `import { channelName } from './transports/redisTransport';` (this file's own `channelName` import path moved as part of NOT-20's transport-abstraction refactor — the rest of the file, including `send()`'s body, is otherwise unaffected by that change):
 
 ```ts
 import { validateNotification } from './notification';
