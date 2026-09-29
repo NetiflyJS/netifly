@@ -266,9 +266,13 @@ socket authenticated as `userId`:
    `aid === frame.action`, `uid === userId` → any mismatch → ack
    `'invalid'`, stop.
 3. `Date.now() > exp` → ack `'expired'`, stop.
-4. `SET netifly:<ns>:answered:<nid> <aid> NX EX <ttl>` where
-   `ttl = Math.max(1, Math.ceil((exp - Date.now()) / 1000))`, on the same
-   Redis client `RedisRouter` already holds. `NX` fails (key exists) →
+4. `transport.claim(`answered:<nid>`, ttl)` where
+   `ttl = Math.max(1, Math.ceil((exp - Date.now()) / 1000))` — a new atomic
+   claim primitive on the `NetiflyTransport` interface itself (added post
+   NOT-20's transport-abstraction refactor, which replaced the earlier
+   direct-Redis `RedisRouter` this section originally assumed), backed by
+   `SET NX EX` in `redisTransport()` and an in-process TTL map in
+   `memoryTransport()`. `claim()` resolving `false` (already claimed) →
    ack `'already_answered'`, stop.
 5. Emit `'action'` locally, exactly once: `{ userId, notificationId: nid, actionId: aid, input: frame.input, context: ctx ?? undefined }`.
 6. Publish `{ type: 'netifly.notification.resolved', id: nid, action: aid }`
