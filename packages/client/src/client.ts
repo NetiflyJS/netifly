@@ -419,24 +419,24 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
       for (const handler of [...this.actionAckHandlers]) {
         this.safely(() => handler(info));
       }
-      return;
     }
     if (envelope.type === 'netifly.notification.resolved') {
       const info = envelope.data as ResolvedInfo;
       for (const handler of [...this.resolvedHandlers]) {
         this.safely(() => handler(info));
       }
-      return;
     }
 
     if (typeof envelope.id === 'string' && !envelope.type.startsWith('netifly.')) {
       this.currentEventId = envelope.id;
     }
 
-    const handlers = this.handlers.get(envelope.type);
-    if (handlers) {
-      for (const handler of [...handlers]) {
-        this.safely(() => handler(envelope.data, envelope));
+    if (!envelope.type.startsWith('netifly.')) {
+      const handlers = this.handlers.get(envelope.type);
+      if (handlers) {
+        for (const handler of [...handlers]) {
+          this.safely(() => handler(envelope.data, envelope));
+        }
       }
     }
     for (const handler of [...this.anyHandlers]) {

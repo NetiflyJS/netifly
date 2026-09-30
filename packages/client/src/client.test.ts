@@ -788,5 +788,59 @@ describe('NetiflyClient', () => {
       expect(stray).toEqual([]);
       expect(client.lastEventId).toBe(lastEventIdBeforeAck);
     });
+
+    it('onAny() still receives netifly.actionAck and netifly.notification.resolved envelopes', async () => {
+      const server = track(await startServerWithActions('client-action-secret-4'));
+      const clientA = makeClient(server.port);
+      const clientB = makeClient(server.port);
+
+      clientA.connect();
+      await nextState(clientA, 'open');
+      clientB.connect();
+      await nextState(clientB, 'open');
+
+      const notificationOnA = new Promise<{ id: string; token: string }>((resolve) => {
+        const off = clientA.onAny((envelope) => {
+          if (envelope.type === 'notification') {
+            off();
+            const data = envelope.data as { actions: { id: string; token: string }[] };
+            resolve({ id: envelope.id, token: data.actions[0].token });
+          }
+        });
+      });
+
+      await server.netifly.notify('alice', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const { id, token } = await notificationOnA;
+
+      const actionAckOnAny = new Promise<Envelope>((resolve) => {
+        const off = clientA.onAny((envelope) => {
+          if (envelope.type === 'netifly.actionAck') {
+            off();
+            resolve(envelope);
+          }
+        });
+      });
+      const resolvedOnAnyB = new Promise<Envelope>((resolve) => {
+        const off = clientB.onAny((envelope) => {
+          if (envelope.type === 'netifly.notification.resolved') {
+            off();
+            resolve(envelope);
+          }
+        });
+      });
+
+      clientA.respondToAction(id, 'approve', token);
+
+      const actionAckEnvelope = await actionAckOnAny;
+      const resolvedEnvelope = await resolvedOnAnyB;
+      expect(actionAckEnvelope.data).toEqual({ id, action: 'approve', status: 'accepted' });
+      expect(resolvedEnvelope.data).toEqual({ id, action: 'approve' });
+    });
   });
 });
