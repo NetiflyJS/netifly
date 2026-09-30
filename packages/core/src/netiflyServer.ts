@@ -341,6 +341,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       claimed = await this.transport.claim(`answered:${payload.nid}`, ttlSeconds);
     } catch (error) {
       this.emitError(error);
+      this.sendActionAck(ws, frame.id, frame.action, 'invalid');
       return;
     }
     if (!claimed) {
