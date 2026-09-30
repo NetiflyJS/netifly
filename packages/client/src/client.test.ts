@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { createNetifly } from '@netiflyjs/core';
 import type { NetiflyInstance } from '@netiflyjs/core';
 import { createNetiflyClient, NetiflyClient } from './client';
-import type { ConnectionState, Envelope } from './types';
+import type { ActionAckInfo, ConnectionState, Envelope, ResolvedInfo } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -46,6 +46,22 @@ async function startServer(port = 0): Promise<TestServer> {
     redisUrl: REDIS_URL,
     allowedOrigins: '*',
     actionSecret: false,
+  });
+  netifly.on('error', () => {
+    /* keep transient errors from crashing the test process */
+  });
+  await new Promise<void>((resolve) => httpServer.listen(port, '127.0.0.1', resolve));
+  return { netifly, httpServer, port: (httpServer.address() as AddressInfo).port };
+}
+
+async function startServerWithActions(secret: string, port = 0): Promise<TestServer> {
+  const httpServer = http.createServer((_req, res) => res.end());
+  const netifly = createNetifly<Events>({
+    server: httpServer,
+    resolveUserId,
+    redisUrl: REDIS_URL,
+    allowedOrigins: '*',
+    actionSecret: secret,
   });
   netifly.on('error', () => {
     /* keep transient errors from crashing the test process */
@@ -633,6 +649,144 @@ describe('NetiflyClient', () => {
       await wait(200);
 
       expect(client.lastEventId).toBe(envelope.id);
+    });
+  });
+
+  describe('actionable notifications', () => {
+    it('respondToAction() sends an action frame with the given token and input, and the server answers with an accepted ack', async () => {
+      const server = track(await startServerWithActions('client-action-secret'));
+      const client = makeClient(server.port);
+
+      client.connect();
+      await nextState(client, 'open');
+
+      const notificationReceived = new Promise<{ id: string; token: string }>((resolve) => {
+        const off = client.onAny((envelope) => {
+          if (envelope.type === 'notification') {
+            off();
+            const data = envelope.data as { actions: { id: string; token: string }[] };
+            resolve({ id: envelope.id, token: data.actions[0].token });
+          }
+        });
+      });
+
+      await server.netifly.notify('alice', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const { id, token } = await notificationReceived;
+
+      const ackPromise = new Promise<ActionAckInfo>((resolve) => {
+        const off = client.onActionAck((info) => {
+          off();
+          resolve(info);
+        });
+      });
+
+      client.respondToAction(id, 'approve', token);
+
+      const ack = await ackPromise;
+      expect(ack).toEqual({ id, action: 'approve', status: 'accepted' });
+    });
+
+    it('onResolved() fires on a second device when the first answers', async () => {
+      const server = track(await startServerWithActions('client-action-secret-2'));
+      const clientA = makeClient(server.port);
+      const clientB = makeClient(server.port);
+
+      clientA.connect();
+      await nextState(clientA, 'open');
+      clientB.connect();
+      await nextState(clientB, 'open');
+
+      const notificationOnA = new Promise<{ id: string; token: string }>((resolve) => {
+        const off = clientA.onAny((envelope) => {
+          if (envelope.type === 'notification') {
+            off();
+            const data = envelope.data as { actions: { id: string; token: string }[] };
+            resolve({ id: envelope.id, token: data.actions[0].token });
+          }
+        });
+      });
+
+      await server.netifly.notify('alice', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const { id, token } = await notificationOnA;
+
+      const resolvedOnB = new Promise<ResolvedInfo>((resolve) => {
+        const off = clientB.onResolved((info) => {
+          off();
+          resolve(info);
+        });
+      });
+
+      clientA.respondToAction(id, 'approve', token);
+
+      expect(await resolvedOnB).toEqual({ id, action: 'approve' });
+    });
+
+    it('respondToAction() no-ops when not connected', () => {
+      const client = createNetiflyClient<Events>({ url: 'ws://127.0.0.1:1/netifly' });
+      clients.push(client);
+      expect(() => client.respondToAction('x', 'approve', 'token')).not.toThrow();
+    });
+
+    it("netifly.actionAck does not dispatch through on(type, handler) or trigger auto-ack/lastEventId", async () => {
+      const server = track(await startServerWithActions('client-action-secret-3'));
+      const client = makeClient(server.port);
+
+      client.connect();
+      await nextState(client, 'open');
+
+      const notificationReceived = new Promise<{ id: string; token: string }>((resolve) => {
+        const off = client.onAny((envelope) => {
+          if (envelope.type === 'notification') {
+            off();
+            const data = envelope.data as { actions: { id: string; token: string }[] };
+            resolve({ id: envelope.id, token: data.actions[0].token });
+          }
+        });
+      });
+
+      await server.netifly.notify('alice', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const { id, token } = await notificationReceived;
+      const lastEventIdBeforeAck = client.lastEventId;
+
+      const stray: unknown[] = [];
+      // Cast to bypass the typed `on<K extends keyof Events>` constraint —
+      // 'netifly.actionAck' is deliberately not a member of the test's
+      // `Events` map (it's a protocol frame, not an app event), so this
+      // needs an escape hatch purely to prove no app handler ever receives it.
+      (client.on as (type: string, handler: (data: unknown) => void) => () => void)(
+        'netifly.actionAck',
+        (data) => stray.push(data)
+      );
+
+      const ackPromise = new Promise<ActionAckInfo>((resolve) => {
+        const off = client.onActionAck((info) => {
+          off();
+          resolve(info);
+        });
+      });
+      client.respondToAction(id, 'approve', token);
+      await ackPromise;
+
+      expect(stray).toEqual([]);
+      expect(client.lastEventId).toBe(lastEventIdBeforeAck);
     });
   });
 });
