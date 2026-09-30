@@ -3,6 +3,7 @@ import { expectType, expectError } from 'tsd';
 import {
   createNetifly,
   createNetiflyPublisher,
+  type ActionInfo,
   type Notification,
   type SendResult,
 } from '../src/index';
@@ -104,3 +105,35 @@ expectType<Promise<SendResult>>(
 expectType<Promise<SendResult>>(untypedNetifly.notify(userId, infoNotification));
 expectType<Promise<SendResult>>(publisher.notify(userId, infoNotification));
 expectType<Promise<SendResult>>(untypedPublisher.notify(userId, infoNotification));
+
+// --- notify(kind:'action') and on('action'): NOT-38 ---
+
+const actionNotification = createNetifly<Events>({
+  server,
+  resolveUserId: async () => userId,
+  redisUrl: 'redis://127.0.0.1:6379',
+  actionSecret: 'test-secret',
+});
+
+expectType<Promise<SendResult>>(
+  actionNotification.notify(userId, {
+    kind: 'action',
+    title: 'Approve?',
+    body: 'x',
+    actions: [{ id: 'approve', label: 'Approve' }],
+    expiresAt: Date.now() + 60_000,
+  })
+);
+
+actionNotification.on('action', (info) => {
+  expectType<ActionInfo>(info);
+});
+
+// actionSecret: false is a valid construction-time opt-out — this must
+// simply compile without a type error, no return-type assertion needed.
+createNetifly<Events>({
+  server,
+  resolveUserId: async () => userId,
+  redisUrl: 'redis://127.0.0.1:6379',
+  actionSecret: false,
+});
