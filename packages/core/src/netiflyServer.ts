@@ -637,8 +637,19 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
               })
           )
       );
-      const timeout = new Promise<void>((resolve) => setTimeout(resolve, drainMs));
-      await Promise.race([drained, timeout]);
+      let timer: NodeJS.Timeout;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, drainMs);
+      });
+      try {
+        await Promise.race([drained, timeout]);
+      } finally {
+        // Whichever side of the race won, the timer must be cancelled here —
+        // otherwise, when every client closes gracefully well before
+        // drainMs, this setTimeout keeps running (and keeps the event loop,
+        // and Jest, alive) until it eventually fires on its own.
+        clearTimeout(timer!);
+      }
 
       for (const ws of this.wss.clients) {
         ws.terminate();

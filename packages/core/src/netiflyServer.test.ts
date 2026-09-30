@@ -671,6 +671,52 @@ describe('createNetifly', () => {
     expect(await clientClosePromise).toBe(1012);
   });
 
+  // The drain race in close() starts a `setTimeout(resolve, drainMs)` to bound
+  // how long it waits for clients to finish their closing handshake. When
+  // every client closes gracefully well before drainMs, `Promise.race` picks
+  // the drain side and returns — but the timer itself was never cancelled, so
+  // it keeps the event loop (and, in tests, Jest) alive until drainMs
+  // eventually elapses. Found via `--detectOpenHandles`; mirrors the fix
+  // already applied to `disconnectRedis` in redisDisconnect.ts.
+  it('clears the drain timer once every client closes gracefully, instead of leaking it until drainMs elapses (NOT-19)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-close-clears-drain-timer');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    // Distinctive drainMs so the drain timer can be picked out from any other
+    // setTimeout calls (e.g. inside `ws` itself) sharing the same spies.
+    const DRAIN_MS = 60_000;
+    let drainTimer: NodeJS.Timeout | undefined;
+    const originalSetTimeout = global.setTimeout;
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((
+      fn: (...args: unknown[]) => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      const timer = originalSetTimeout(fn, ms, ...args);
+      if (ms === DRAIN_MS) drainTimer = timer;
+      return timer;
+    }) as typeof setTimeout);
+    const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+    try {
+      // A large drainMs that would keep the process alive for its full
+      // duration if the drain race's timer were never cleared — the client
+      // closes gracefully almost immediately, well before this could fire.
+      await server.close({ drainMs: DRAIN_MS });
+      servers.pop(); // already closed above; skip afterEach double-close
+
+      expect(drainTimer).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(drainTimer);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
   // NOT-19: a client that never completes the closing handshake (e.g. dead
   // network, unresponsive process) must not block close() forever — after
   // drainMs elapses, any still-connected socket is force-terminated so
