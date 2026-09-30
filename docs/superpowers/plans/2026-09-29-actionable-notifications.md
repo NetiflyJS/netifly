@@ -2019,7 +2019,7 @@ to:
     ws.on('message', (data) => this.handleInboundFrame(userId, ws, data, inboundBucket));
 ```
 
-Finally, replace the whole `handleInboundFrame` method. **Note:** the actual current method already publishes via `this.transport.publish(userId, message)` and a `serializeEnvelope()` helper (from the NOT-20 transport-abstraction refactor), not `this.router.publish(userId, envelope)` — the "before" snippet below matches the real current file:
+Finally, replace the whole `handleInboundFrame` method. **Note (updated after Task 5 landed):** Task 5 already added a `frame.type === 'action'` no-op stopgap (`if (frame.type === 'action') { return; }`, right after `const frame = parsed.frame;`, with an explanatory comment) purely to keep the file compiling once `InboundFrame` widened to include `'action'` — it does nothing else, no emit, no relay. The "before" snippet below matches the real current file, stopgap included; this step replaces that stopgap's bare `return;` with the real `handleActionFrame` call:
 
 ```ts
   private handleInboundFrame(userId: UserId, data: RawData, bucket: TokenBucket): void {
@@ -2034,8 +2034,16 @@ Finally, replace the whole `handleInboundFrame` method. **Note:** the actual cur
       return;
     }
 
-    const ts = Date.now();
     const frame = parsed.frame;
+
+    // Action frames are handled by a later task, which replaces this whole method with real
+    // signature verification and idempotency handling. This stub exists only
+    // so the type-widened InboundFrame union still compiles here.
+    if (frame.type === 'action') {
+      return;
+    }
+
+    const ts = Date.now();
     let relayType: string;
     let relayData: unknown;
 
