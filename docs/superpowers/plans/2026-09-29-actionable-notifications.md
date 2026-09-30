@@ -1842,7 +1842,10 @@ Then insert, immediately before the file's final `});` (after the `notify()` des
       await onceEvent(instanceB.netifly, 'connect');
 
       const notificationOnA = nextMatchingMessage(wsA, (e) => e.type === 'notification');
-      const actionOnB = onceInfo<{ notificationId: string; actionId: string }>(instanceB.netifly, 'action');
+      const actionOnB = onceInfo<{ userId: string; notificationId: string; actionId: string }>(
+        instanceB.netifly,
+        'action'
+      );
       const resolvedOnA = nextMatchingMessage(wsA, (e) => e.type === 'netifly.notification.resolved');
       const resolvedOnB = nextMatchingMessage(wsB, (e) => e.type === 'netifly.notification.resolved');
 
@@ -1860,7 +1863,7 @@ Then insert, immediately before the file's final `});` (after the `notify()` des
       wsB.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
 
       expect((await ackOnB).data).toEqual({ id: envelope.id, action: 'approve', status: 'accepted' });
-      expect(await actionOnB).toEqual({ notificationId: envelope.id, actionId: 'approve' });
+      expect(await actionOnB).toEqual({ userId, notificationId: envelope.id, actionId: 'approve' });
       expect((await resolvedOnA).data).toEqual({ id: envelope.id, action: 'approve' });
       expect((await resolvedOnB).data).toEqual({ id: envelope.id, action: 'approve' });
     });
@@ -1929,11 +1932,15 @@ Add a field, and resolve it in the constructor. Add right after `private readonl
   private readonly actionSecret: string | undefined;
 ```
 
-In the constructor, right after `this.validate = options.validate;`, add:
+**⚠️ Placement matters here — do not place this right after `this.validate = options.validate;`.** That line runs *before* the existing `transport`/`namespace` mutual-exclusivity check and the `redisUrl`-missing check further down the constructor. `resolveActionSecret()` can itself throw (when neither an `actionSecret` option nor `NETIFLY_SECRET` is set), and if it runs first, its error masks those pre-existing, more specific validation errors for any caller who triggers one of them without also happening to configure `actionSecret` — including an existing test (`"throws synchronously when both transport and namespace are passed"`) that predates this option entirely.
+
+Instead, add the resolution call **after transport setup completes**, right after the existing `this.transport.onError((error) => this.emitError(error));` line and before `this.wss = new WebSocketServer({ noServer: true, maxPayload: this.maxPayload });`:
 
 ```ts
     this.actionSecret = resolveActionSecret(options.actionSecret);
 ```
+
+This way every pre-existing constructor validation (the `transport`+`namespace` conflict, the missing-`redisUrl` check) still fires first, exactly as before this option existed — `actionSecret` resolution is additive at the *end* of construction-time validation, not inserted ahead of it.
 
 Change `buildEnvelope` to accept an optional preset id (needed so a `kind:'action'` notification's envelope id matches the `nid` embedded in its tokens):
 
@@ -2347,7 +2354,9 @@ Add a field and resolve it in the constructor. Right after `private readonly val
   private readonly actionSecret: string | undefined;
 ```
 
-In the constructor, right after `this.validate = options.validate;`, add:
+**⚠️ Same placement caveat as Task 6's server-side change.** `this.validate = options.validate;` runs *before* the existing missing-`redisUrl` check further down this constructor — an existing test (`"throws at construction time when neither redisUrl nor REDIS_URL is set"`, called with no `actionSecret` either) would otherwise get the new `actionSecret` error instead of the expected `redisUrl` one.
+
+Instead, add the resolution call at the **end** of the constructor, right after the existing `this.redis = new Redis(redisUrl, { lazyConnect: true });` line (the constructor's last statement):
 
 ```ts
     this.actionSecret = resolveActionSecret(options.actionSecret);
