@@ -5,6 +5,7 @@ import type Redis from 'ioredis';
 import { createNetifly } from './netiflyServer';
 import { createNetiflyPublisher } from './netiflyPublisher';
 import { NotificationValidationError } from './notification';
+import { verifyActionToken } from './actionToken';
 import type { CreateNetiflyOptions, NetiflyInstance, NetiflyPublisher } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
@@ -106,7 +107,7 @@ describe('createNetiflyPublisher', () => {
     clients.push(client);
     await connectedPromise;
 
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     const messagePromise = nextMessage(client);
@@ -133,7 +134,7 @@ describe('createNetiflyPublisher', () => {
     clients.push(client);
     await connectedPromise;
 
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     const messagePromise = nextMessage(client);
@@ -153,7 +154,7 @@ describe('createNetiflyPublisher', () => {
     clients.push(client);
     await connectedPromise;
 
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, namespace: 'staging' });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, namespace: 'staging', actionSecret: false });
     publishers.push(publisher);
 
     const messagePromise = nextMessage(client);
@@ -163,7 +164,7 @@ describe('createNetiflyPublisher', () => {
     expect(result).toEqual({ delivered: true, instances: 1 });
 
     // A publisher without the matching namespace must not reach the same user.
-    const unnamespacedPublisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const unnamespacedPublisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(unnamespacedPublisher);
     await expect(unnamespacedPublisher.send(userId, 'ns.miss', { ok: false })).resolves.toEqual({
       delivered: false,
@@ -182,7 +183,7 @@ describe('createNetiflyPublisher', () => {
     clients.push(client);
     await connectedPromise;
 
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     await expect(publisher.isOnline(onlineUserId)).resolves.toBe(true);
@@ -200,7 +201,7 @@ describe('createNetiflyPublisher', () => {
     clients.push(client);
     await connectedPromise;
 
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     await expect(publisher.whoIsOnline([onlineUserId, offlineUserId])).resolves.toEqual({
@@ -210,7 +211,7 @@ describe('createNetiflyPublisher', () => {
   });
 
   it('send() to an offline user resolves { delivered: false, instances: 0 }', async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     await expect(
@@ -219,7 +220,7 @@ describe('createNetiflyPublisher', () => {
   });
 
   it("rejects a non-serializable payload with the same error netiflyServer's send() path gives", async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     const circular: Record<string, unknown> = {};
@@ -231,7 +232,7 @@ describe('createNetiflyPublisher', () => {
   });
 
   it('close() resolves cleanly, and send()/isOnline() after close() throw a clear error', async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
 
     await expect(publisher.close()).resolves.toBeUndefined();
 
@@ -250,7 +251,7 @@ describe('createNetiflyPublisher', () => {
   // needs to wait for that before close() resolves, or the still-armed timer
   // shows up as a Jest open handle.
   it('close() waits for the underlying Redis connection to fully disconnect', async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     await publisher.send('netiflyPublisher-close-waits', { type: 'x' }); // forces a real connection
@@ -261,7 +262,7 @@ describe('createNetiflyPublisher', () => {
   });
 
   it('emits "sent" synchronously with the generated id before publishing', async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     const sentPromise = new Promise<{ userId: string; id: string; type: string; data: unknown }>(
@@ -279,7 +280,7 @@ describe('createNetiflyPublisher', () => {
   });
 
   it('isolates a throwing "sent" listener: send() still resolves and publishes', async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     publisher.on('sent', () => {
@@ -291,7 +292,7 @@ describe('createNetiflyPublisher', () => {
   });
 
   it('a "once" listener on "sent" still fires exactly once despite the safety wrapper', async () => {
-    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+    const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
     publishers.push(publisher);
 
     const calls: unknown[] = [];
@@ -312,7 +313,7 @@ describe('createNetiflyPublisher', () => {
       clients.push(ws);
       await connectedPromise;
 
-      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
       publishers.push(publisher);
 
       const messagePromise = nextMessage(ws);
@@ -333,7 +334,7 @@ describe('createNetiflyPublisher', () => {
     });
 
     it('rejects an invalid notification without publishing anything', async () => {
-      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
       publishers.push(publisher);
 
       await expect(
@@ -343,7 +344,7 @@ describe('createNetiflyPublisher', () => {
 
     it('does not run the app-level validate hook for notify()', async () => {
       const validate = jest.fn();
-      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, validate });
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, validate, actionSecret: false });
       publishers.push(publisher);
 
       await publisher.notify('netiflyPublisher-notify-no-app-validate', {
@@ -355,7 +356,7 @@ describe('createNetiflyPublisher', () => {
     });
 
     it('throws after close(), same as send()', async () => {
-      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL });
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
       await publisher.close();
 
       await expect(
@@ -365,6 +366,80 @@ describe('createNetiflyPublisher', () => {
           body: 'Done.',
         })
       ).rejects.toThrow('Netifly: cannot use publisher after close()');
+    });
+  });
+
+  describe('actionSecret', () => {
+    it('throws at construction when neither actionSecret nor NETIFLY_SECRET is set', () => {
+      const original = process.env.NETIFLY_SECRET;
+      delete process.env.NETIFLY_SECRET;
+      try {
+        expect(() => createNetiflyPublisher({ redisUrl: REDIS_URL })).toThrow(
+          'Netifly: no actionSecret provided and NETIFLY_SECRET is not set'
+        );
+      } finally {
+        if (original !== undefined) process.env.NETIFLY_SECRET = original;
+      }
+    });
+
+    it('does not throw at construction when actionSecret: false is passed', () => {
+      expect(() => {
+        const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
+        publishers.push(publisher);
+      }).not.toThrow();
+    });
+
+    it("notify(kind:'action') throws when actionSecret: false was passed", async () => {
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: false });
+      publishers.push(publisher);
+
+      await expect(
+        publisher.notify('netiflyPublisher-action-disabled', {
+          kind: 'action',
+          title: 'Approve?',
+          body: 'x',
+          actions: [{ id: 'approve', label: 'Approve' }],
+          expiresAt: Date.now() + 60_000,
+        })
+      ).rejects.toThrow("Netifly: kind:'action' notifications are disabled");
+    });
+  });
+
+  describe("notify(kind:'action')", () => {
+    it('publishes an action notification whose token verifies with the configured secret', async () => {
+      const secret = 'netiflyPublisher-action-secret';
+      const server = await startTestServer(() => 'netiflyPublisher-action-user');
+      servers.push(server);
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await onceEvent(server.netifly, 'connect');
+
+      const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: secret });
+      publishers.push(publisher);
+
+      const messagePromise = nextMessage(ws);
+      await publisher.notify('netiflyPublisher-action-user', {
+        kind: 'action',
+        title: 'Approve expense £420?',
+        body: 'Submitted by Sam',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+        context: { expenseId: 'exp_123' },
+      });
+
+      const envelope = JSON.parse(await messagePromise);
+      const action = (envelope.data as { actions: { id: string; token: string }[] }).actions[0];
+      expect(action.id).toBe('approve');
+      expect(verifyActionToken(action.token, secret)).toEqual({
+        ok: true,
+        payload: {
+          nid: envelope.id,
+          uid: 'netiflyPublisher-action-user',
+          aid: 'approve',
+          exp: envelope.data.expiresAt,
+          ctx: { expenseId: 'exp_123' },
+        },
+      });
     });
   });
 });

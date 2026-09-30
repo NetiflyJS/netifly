@@ -377,6 +377,8 @@ export interface CreateNetiflyPublisherOptions<Events extends EventMap = EventMa
    * and propagates straight out of `send()`.
    */
   validate?: <K extends keyof Events & string>(type: K, data: Events[K]) => void;
+  /** Same actionSecret resolution as CreateNetiflyOptions — see there for details. */
+  actionSecret?: string | false;
 }
 
 /**
