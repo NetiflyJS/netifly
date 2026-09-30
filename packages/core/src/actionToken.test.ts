@@ -57,6 +57,28 @@ describe('signActionToken / verifyActionToken', () => {
     const [encoded] = token.split('.');
     expect(verifyActionToken(`${encoded}.`, SECRET)).toEqual({ ok: false, reason: 'invalid' });
   });
+
+  it('rejects a token with non-hex garbage appended to the signature', () => {
+    // Buffer.from(str, 'hex') silently truncates decoding at the first
+    // invalid hex character instead of rejecting the string outright. That
+    // means a tampered signature like `${validHex}garbage` can decode to a
+    // buffer that's byte-identical to the one decoded from the real
+    // signature, defeating a naive length + timingSafeEqual check. This
+    // guards against that bypass.
+    const token = signActionToken(basePayload(), SECRET);
+    const tampered = `${token}garbage`;
+    expect(verifyActionToken(tampered, SECRET)).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('rejects a signature that is valid hex but the wrong length', () => {
+    const token = signActionToken(basePayload(), SECRET);
+    const [encoded, signature] = token.split('.');
+    const truncatedSignature = signature.slice(0, -4);
+    expect(verifyActionToken(`${encoded}.${truncatedSignature}`, SECRET)).toEqual({
+      ok: false,
+      reason: 'invalid',
+    });
+  });
 });
 
 describe('buildActionWireNotification', () => {
