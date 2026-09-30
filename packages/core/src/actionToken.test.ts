@@ -79,6 +79,26 @@ describe('signActionToken / verifyActionToken', () => {
       reason: 'invalid',
     });
   });
+
+  it('rejects a same-length signature with a non-hex character in the middle', () => {
+    // Regression guard for the regex half of the pre-decode check: a
+    // signature of exactly the expected length (so the length check alone
+    // would NOT catch it) but containing a non-hex character somewhere in
+    // the middle must still be rejected. Without the /^[0-9a-f]+$/i check,
+    // Buffer.from would silently truncate the decode at that character and
+    // could produce a false match.
+    const token = signActionToken(basePayload(), SECRET);
+    const [encoded, signature] = token.split('.');
+    const middleIndex = Math.floor(signature.length / 2);
+    const mutatedChar = signature[middleIndex] === 'z' ? 'y' : 'z';
+    const mutatedSignature =
+      signature.slice(0, middleIndex) + mutatedChar + signature.slice(middleIndex + 1);
+    expect(mutatedSignature).toHaveLength(signature.length);
+    expect(verifyActionToken(`${encoded}.${mutatedSignature}`, SECRET)).toEqual({
+      ok: false,
+      reason: 'invalid',
+    });
+  });
 });
 
 describe('buildActionWireNotification', () => {
