@@ -410,9 +410,10 @@ describe('createNetiflyPublisher', () => {
       const secret = 'netiflyPublisher-action-secret';
       const server = await startTestServer(() => 'netiflyPublisher-action-user');
       servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const ws = await connectClient(server.port);
       clients.push(ws);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
 
       const publisher = createNetiflyPublisher({ redisUrl: REDIS_URL, actionSecret: secret });
       publishers.push(publisher);
