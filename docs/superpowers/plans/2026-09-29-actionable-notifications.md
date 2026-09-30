@@ -2772,26 +2772,59 @@ git commit -m "feat(client): add respondToAction()/onActionAck()/onResolved() (N
 
 ### Task 9: Package exports, JSON Schema, and type tests
 
+**⚠️ This task's scope changed since it was written.** NOT-37's final-review fix wave (already merged, commits `3a4e15f`/etc.) got to `notificationSchema.ts` first: it's no longer the plain single-shape schema this task's original text assumed. The real current file imports `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH` from `notification.ts` instead of hardcoding them, has no top-level `additionalProperties: false` (a prior review found that rejected payloads the runtime validator actually accepts), and has a `pattern` on `link.href` (a prior review found `javascript:`/`data:` hrefs slipped through an unconstrained schema field). This task's widening must build on top of that, not revert it — and a `notificationSchema.test.ts` file that didn't exist when this task was originally written now does, asserting schema/runtime agreement against the *current flat shape* (`notificationJsonSchema.required`, `.properties.title`, etc.) — the `oneOf` restructuring below breaks that file's field access entirely unless it's updated too, so this task now also touches `notification.ts` (to export one more constant) and `notificationSchema.test.ts`.
+
 **Files:**
+- Modify: `packages/core/src/notification.ts` (export one more constant)
 - Modify: `packages/core/src/notificationSchema.ts`
+- Modify: `packages/core/src/notificationSchema.test.ts`
 - Modify: `packages/core/src/index.ts`
 - Modify: `packages/core/test-d/netifly.test-d.ts`
 
 **Interfaces:**
-- Consumes: everything from Tasks 1–7.
-- Produces: `notificationJsonSchema` widened to cover both kinds, and every new type/function re-exported from `@netiflyjs/core`.
+- Consumes: everything from Tasks 1–7, plus NOT-37's fix-round `notificationSchema.ts`/`notificationSchema.test.ts`.
+- Produces: `notificationJsonSchema` widened to cover both kinds (still built from the same shared constants, now including `MAX_ICON_LENGTH` and `MAX_ACTIONS` too), and every new type/function re-exported from `@netiflyjs/core`.
 
-- [ ] **Step 1: Widen the JSON Schema**
+- [ ] **Step 1: Export one more constant from `notification.ts`**
 
-Replace the full contents of `packages/core/src/notificationSchema.ts` (widens NOT-37's single-object schema into a `oneOf` covering both kinds):
+`MAX_ICON_LENGTH` currently exists in `packages/core/src/notification.ts` but isn't exported (unlike `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH`, which already are). Change:
 
 ```ts
+const MAX_ICON_LENGTH = 200;
+```
+
+to:
+
+```ts
+export const MAX_ICON_LENGTH = 200;
+```
+
+(This also closes a Minor a prior review parked: the schema's `icon` field had no `maxLength` matching this constant — Step 2 below adds it now that the constant is importable.)
+
+- [ ] **Step 2: Widen the JSON Schema, building on the current file, not reverting it**
+
+Replace the full contents of `packages/core/src/notificationSchema.ts` (widens the current single-object schema into a `oneOf` covering both kinds, preserving every existing fix-round improvement — the shared constants import, the dropped top-level `additionalProperties: false`, and the `link.href` pattern):
+
+```ts
+import {
+  MAX_ACTIONS,
+  MAX_BODY_LENGTH,
+  MAX_ICON_LENGTH,
+  MAX_LINK_LABEL_LENGTH,
+  MAX_TITLE_LENGTH,
+} from './notification';
+
 /**
  * A hand-written JSON Schema (draft-07) mirroring `Notification` in
  * types.ts and the runtime checks in notification.ts — kept in sync by
  * hand, since the shape is small and stable. Exported as a plain object
  * (rather than a .json file) so it ships through the normal `tsc` build
  * into `dist/`, matching how every other export in this package is built.
+ *
+ * `additionalProperties` is deliberately omitted at the top level of both
+ * variants: the runtime validator in notification.ts ignores unknown
+ * properties, so a schema that rejected them would be stricter than what
+ * the server actually accepts.
  */
 export const notificationJsonSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
@@ -2800,22 +2833,32 @@ export const notificationJsonSchema = {
     {
       title: 'InfoNotification',
       type: 'object',
-      additionalProperties: false,
       properties: {
         kind: { const: 'info' },
-        title: { type: 'string', minLength: 1, maxLength: 120 },
-        body: { type: 'string', minLength: 1, maxLength: 500 },
+        // minLength: 1 accepts whitespace-only strings (e.g. "   "), which
+        // the runtime validator additionally rejects via a `.trim()` check.
+        // JSON Schema draft-07 can't easily express "non-whitespace", so
+        // this schema is intentionally looser than the runtime here.
+        title: { type: 'string', minLength: 1, maxLength: MAX_TITLE_LENGTH },
+        body: { type: 'string', minLength: 1, maxLength: MAX_BODY_LENGTH },
         severity: { type: 'string', enum: ['info', 'success', 'warning', 'error'] },
         link: {
           type: 'object',
           additionalProperties: false,
           properties: {
-            href: { type: 'string', minLength: 1 },
-            label: { type: 'string', minLength: 1, maxLength: 80 },
+            // Restricts href to a relative path (single leading `/`, not
+            // `//`) or an http(s) URL — blocks the obvious unsafe schemes
+            // and bare `//host` protocol-relative URLs. Can't express the
+            // full origin-resolution check `isSafeLinkHref()` performs at
+            // runtime (e.g. `/\host` variants), so the runtime validator
+            // remains the authoritative check — this is a best-effort
+            // schema-level backstop.
+            href: { type: 'string', minLength: 1, pattern: '^(\\/(?!\\/)|https?:\\/\\/)' },
+            label: { type: 'string', minLength: 1, maxLength: MAX_LINK_LABEL_LENGTH },
           },
           required: ['href', 'label'],
         },
-        icon: { type: 'string' },
+        icon: { type: 'string', maxLength: MAX_ICON_LENGTH },
         expiresAt: { type: 'number' },
         meta: { type: 'object' },
       },
@@ -2824,15 +2867,14 @@ export const notificationJsonSchema = {
     {
       title: 'ActionNotification',
       type: 'object',
-      additionalProperties: false,
       properties: {
         kind: { const: 'action' },
-        title: { type: 'string', minLength: 1, maxLength: 120 },
-        body: { type: 'string', minLength: 1, maxLength: 500 },
+        title: { type: 'string', minLength: 1, maxLength: MAX_TITLE_LENGTH },
+        body: { type: 'string', minLength: 1, maxLength: MAX_BODY_LENGTH },
         actions: {
           type: 'array',
           minItems: 1,
-          maxItems: 5,
+          maxItems: MAX_ACTIONS,
           items: {
             type: 'object',
             additionalProperties: false,
@@ -2863,7 +2905,65 @@ export const notificationJsonSchema = {
 } as const;
 ```
 
-- [ ] **Step 2: Export the new types and functions from `index.ts`**
+- [ ] **Step 3: Fix `notificationSchema.test.ts` for the new `oneOf` shape**
+
+This file (added by NOT-37's fix round) currently accesses `notificationJsonSchema.required` and `notificationJsonSchema.properties.title`/`.body`/`.severity` directly — those paths no longer exist once the schema is a `oneOf` array. All four of its existing fixtures use `kind: 'info'` exclusively, so the fix is to point the helper at the info variant specifically. In `packages/core/src/notificationSchema.test.ts`, change:
+
+```ts
+function checkAgainstSchema(notification: Record<string, unknown>): boolean {
+  for (const field of notificationJsonSchema.required) {
+    if (!(field in notification)) {
+      return false;
+    }
+  }
+
+  const title = notification.title;
+  const titleSchema = notificationJsonSchema.properties.title;
+```
+
+to:
+
+```ts
+const infoSchema = notificationJsonSchema.oneOf[0];
+
+function checkAgainstSchema(notification: Record<string, unknown>): boolean {
+  for (const field of infoSchema.required) {
+    if (!(field in notification)) {
+      return false;
+    }
+  }
+
+  const title = notification.title;
+  const titleSchema = infoSchema.properties.title;
+```
+
+and further down in the same function, change the two remaining `notificationJsonSchema.properties....` references:
+
+```ts
+  const bodySchema = notificationJsonSchema.properties.body;
+```
+
+to:
+
+```ts
+  const bodySchema = infoSchema.properties.body;
+```
+
+and:
+
+```ts
+    const allowed: readonly string[] = notificationJsonSchema.properties.severity.enum;
+```
+
+to:
+
+```ts
+    const allowed: readonly string[] = infoSchema.properties.severity.enum;
+```
+
+No other part of this file changes — the fixtures, `runtimeAccepts()`, and the `it.each` block are all kind-agnostic-in-content-but-info-in-practice already and need no edits.
+
+- [ ] **Step 4: Export the new types and functions from `index.ts`**
 
 In `packages/core/src/index.ts`, add right after the existing `export { NotificationValidationError, validateNotification } from './notification';` line:
 
@@ -2886,7 +2986,7 @@ Add these two type names from `./actionToken`, as a new export line right after 
 export type { ActionTokenPayload, VerifyActionTokenResult } from './actionToken';
 ```
 
-- [ ] **Step 3: Add tsd type tests**
+- [ ] **Step 5: Add tsd type tests**
 
 Change the existing top-of-file import block in `packages/core/test-d/netifly.test-d.ts` from:
 
@@ -2948,7 +3048,7 @@ createNetifly<Events>({
 });
 ```
 
-- [ ] **Step 4: Run typecheck, tsd, and the full test suite**
+- [ ] **Step 6: Run typecheck, tsd, and the full test suite**
 
 Run: `cd packages/core && npx tsc -p tsconfig.json --noEmit && npx tsd`
 Expected: no errors from either.
@@ -2959,10 +3059,10 @@ Expected: PASS — full suite.
 Run: `cd packages/client && REDIS_URL=redis://127.0.0.1:6379 npx jest` and `cd packages/express && REDIS_URL=redis://127.0.0.1:6379 npx jest`
 Expected: PASS — full suites.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/core/src/notificationSchema.ts packages/core/src/index.ts packages/core/test-d/netifly.test-d.ts
+git add packages/core/src/notification.ts packages/core/src/notificationSchema.ts packages/core/src/notificationSchema.test.ts packages/core/src/index.ts packages/core/test-d/netifly.test-d.ts
 git commit -m "feat(core): export actionable notification types, widen JSON schema, add type tests (NOT-38)"
 ```
 
