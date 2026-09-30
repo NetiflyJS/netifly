@@ -9,6 +9,12 @@ module.exports = {
     ecmaVersion: 2022,
     sourceType: 'module',
   },
+  rules: {
+    // Lets `const { key: _key, ...rest } = obj;` omit a property without
+    // flagging the discarded binding — the standard way to drop one field
+    // from an object via destructuring.
+    '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
+  },
   overrides: [
     {
       // @netiflyjs/client ships browser-facing code built on the standard

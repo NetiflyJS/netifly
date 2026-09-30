@@ -34,7 +34,7 @@ describe('validateNotification: kind: info', () => {
   });
 
   it('rejects a missing kind', () => {
-    const { kind: _kind, ...rest } = baseInfo();
+    const { kind, ...rest } = baseInfo();
     expect(() => validateNotification(rest as unknown as InfoNotification)).toThrow(
       NotificationValidationError
     );
@@ -270,7 +270,7 @@ describe('validateNotification: kind: action', () => {
   });
 
   it('rejects a missing expiresAt', () => {
-    const { expiresAt: _expiresAt, ...rest } = baseAction();
+    const { expiresAt, ...rest } = baseAction();
     expect(() => validateNotification(rest as unknown as ActionNotification)).toThrow(
       NotificationValidationError
     );
