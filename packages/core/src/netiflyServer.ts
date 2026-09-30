@@ -13,7 +13,6 @@ import { TokenBucket } from './rateLimiter';
 import { validateNotification } from './notification';
 import { ENVELOPE_VERSION } from './types';
 import type {
-  ActionInfo,
   AckInfo,
   AllowedOrigins,
   CloseOptions,
@@ -40,14 +39,14 @@ const DEFAULT_MAX_CONNECTIONS_PER_USER = 10;
 const DEFAULT_MAX_INBOUND_FRAMES_PER_SECOND = 20;
 const DEFAULT_DRAIN_MS = 5000;
 
-// Events introduced for client acks/read state (NOT-30) and actions (NOT-38) — a listener that
+// Events introduced for client acks/read state (NOT-30) — a listener that
 // throws or rejects on one of these must never crash the host process or
 // block other listeners for the same event (spec §9). Registered listeners
 // for these events are wrapped (see wrapListener) so a bad app hook — e.g.
 // one that persists to a database and occasionally rejects — can't take the
 // server down. Pre-existing events ('connect'/'disconnect'/'error'/
 // 'reject'/'dropped') keep their existing unwrapped behavior.
-const SAFE_EVENTS = new Set(['sent', 'delivered', 'read', 'response', 'action', 'malformedFrame']);
+const SAFE_EVENTS = new Set(['sent', 'delivered', 'read', 'response', 'malformedFrame']);
 
 class NetiflyServerImpl<Events extends EventMap = EventMap>
   extends EventEmitter
@@ -264,8 +263,16 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       return;
     }
 
-    const ts = Date.now();
     const frame = parsed.frame;
+
+    // Action frames are handled by a later task, which replaces this whole method with real
+    // signature verification and idempotency handling. This stub exists only
+    // so the type-widened InboundFrame union still compiles here.
+    if (frame.type === 'action') {
+      return;
+    }
+
+    const ts = Date.now();
     let relayType: string;
     let relayData: unknown;
 
@@ -277,10 +284,6 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       this.emit('read', { userId, id: frame.id, ts } satisfies AckInfo);
       relayType = 'netifly.read';
       relayData = { id: frame.id };
-    } else if (frame.type === 'action') {
-      this.emit('action', { userId, notificationId: frame.id, actionId: frame.action, input: frame.input } satisfies ActionInfo);
-      relayType = 'netifly.action';
-      relayData = { id: frame.id, action: frame.action, input: frame.input };
     } else {
       this.emit('response', { userId, id: frame.id, payload: frame.payload, ts } satisfies ResponseInfo);
       relayType = 'netifly.response';
