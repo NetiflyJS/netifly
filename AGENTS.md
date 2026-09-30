@@ -65,6 +65,13 @@ and publish each package independently — don't hand-edit `CHANGELOG.md` or pac
   (`.eslintrc.cjs`). Run `pnpm lint` rather than hand-formatting.
 - Tests are colocated with source as `*.test.ts` and run with Jest (`ts-jest`).
 
+## Package metadata
+
+Every publishable package's `package.json` must include a `keywords` array — these are the
+tags npm uses for search/discoverability. Include `netifly`, the technologies it wraps
+(`websocket`, `redis`, etc.), and its category (`notifications`, `realtime`, framework name
+for adapters). Add this when scaffolding any new package under `packages/`.
+
 ## Things to know
 
 - Never hardcode a Redis connection string or default to `localhost` — `redisUrl` /

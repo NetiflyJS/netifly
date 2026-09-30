@@ -2,6 +2,16 @@
   "name": "@netiflyjs/core",
   "version": "1.12.0",
   "description": "Framework-agnostic real-time notification core for Node.js servers, backed by WebSockets and a pluggable transport (Redis by default).",
+  "keywords": [
+    "netifly",
+    "notifications",
+    "realtime",
+    "websocket",
+    "websockets",
+    "redis",
+    "pubsub",
+    "nodejs"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
