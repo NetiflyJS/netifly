@@ -48,9 +48,21 @@ export function verifyActionToken(token: string, secret: string): VerifyActionTo
   const signature = token.slice(separatorIndex + 1);
   const expected = sign(encoded, secret);
 
+  // Buffer.from(str, 'hex') silently truncates at the first invalid hex
+  // character instead of rejecting the string — so a tampered signature
+  // with garbage appended (e.g. `${validHex}garbage`) can decode to a
+  // buffer that's byte-identical to the valid one, defeating a
+  // length/timingSafeEqual check performed only on the decoded buffers.
+  // Reject anything that isn't itself a complete, well-formed hex string
+  // of the exact expected length BEFORE decoding, so the decode step can
+  // never be lossy.
+  if (signature.length !== expected.length || !/^[0-9a-f]+$/i.test(signature)) {
+    return { ok: false, reason: 'invalid' };
+  }
+
   const expectedBuffer = Buffer.from(expected, 'hex');
   const actualBuffer = Buffer.from(signature, 'hex');
-  if (expectedBuffer.length !== actualBuffer.length || !timingSafeEqual(expectedBuffer, actualBuffer)) {
+  if (!timingSafeEqual(expectedBuffer, actualBuffer)) {
     return { ok: false, reason: 'invalid' };
   }
 
