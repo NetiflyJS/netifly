@@ -45,6 +45,7 @@ async function startServer(port = 0): Promise<TestServer> {
     resolveUserId,
     redisUrl: REDIS_URL,
     allowedOrigins: '*',
+    actionSecret: false,
   });
   netifly.on('error', () => {
     /* keep transient errors from crashing the test process */

@@ -139,6 +139,13 @@ export interface CreateNetiflyOptions<Events extends EventMap = EventMap> {
    * `sendOr()` call (it is not caught or wrapped).
    */
   validate?: <K extends keyof Events & string>(type: K, data: Events[K]) => void;
+  /**
+   * HMAC secret used to sign kind:'action' notification tokens. Falls back
+   * to the NETIFLY_SECRET environment variable. Required unless explicitly
+   * set to `false`, in which case createNetifly() starts normally but any
+   * notify() call with kind:'action' throws.
+   */
+  actionSecret?: string | false;
 }
 
 /** Emitted via the `reject` event when an upgrade is rejected. */

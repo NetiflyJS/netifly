@@ -26,6 +26,7 @@ async function startTestServer(
     server: httpServer,
     resolveUserId: resolveUserId as never,
     redisUrl: REDIS_URL,
+    actionSecret: false,
     ...extra,
   });
 
