@@ -58,6 +58,19 @@ export interface CloseInfo {
   wasClean: boolean;
 }
 
+/** Status returned by the server's `netifly.actionAck` reply to `respondToAction()`. */
+export interface ActionAckInfo {
+  id: string;
+  action: string;
+  status: 'accepted' | 'already_answered' | 'expired' | 'invalid';
+}
+
+/** The `netifly.notification.resolved` relay — syncs an answered action notification across a user's other tabs/devices. */
+export interface ResolvedInfo {
+  id: string;
+  action: string;
+}
+
 export interface NetiflyClientOptions {
   /** The Netifly WebSocket endpoint, e.g. `wss://api.example.com/netifly`. */
   url: string;

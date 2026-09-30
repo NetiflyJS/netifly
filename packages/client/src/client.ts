@@ -1,10 +1,12 @@
 import { fullJitterDelay, planReconnect } from './reconnect';
 import type {
+  ActionAckInfo,
   CloseInfo,
   ConnectionState,
   Envelope,
   EventMap,
   NetiflyClientOptions,
+  ResolvedInfo,
   TokenMode,
 } from './types';
 
@@ -65,6 +67,8 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
   private readonly stateHandlers = new Set<(state: ConnectionState) => void>();
   private readonly closeHandlers = new Set<(info: CloseInfo) => void>();
   private readonly errorHandlers = new Set<(error: Error) => void>();
+  private readonly actionAckHandlers = new Set<(info: ActionAckInfo) => void>();
+  private readonly resolvedHandlers = new Set<(info: ResolvedInfo) => void>();
 
   private socket: WebSocket | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -194,6 +198,16 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     return this.subscribe(this.errorHandlers, handler);
   }
 
+  /** Subscribes to the server's ack of a respondToAction() call: accepted, already_answered, expired, or invalid. */
+  onActionAck(handler: (info: ActionAckInfo) => void): Unsubscribe {
+    return this.subscribe(this.actionAckHandlers, handler);
+  }
+
+  /** Subscribes to netifly.notification.resolved — fires on every one of a user's connections (including the one that answered) when an actionable notification is answered. */
+  onResolved(handler: (info: ResolvedInfo) => void): Unsubscribe {
+    return this.subscribe(this.resolvedHandlers, handler);
+  }
+
   /** Sends `{ type: 'read', id }`. No-op if not connected. */
   markRead(id: string): void {
     this.sendFrame({ type: 'read', id });
@@ -204,8 +218,16 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     this.sendFrame({ type: 'response', id, payload });
   }
 
+  /** Sends { type: 'action', id, action, token, input }. No-op if not connected. */
+  respondToAction(id: string, action: string, token: string, input?: unknown): void {
+    this.sendFrame({ type: 'action', id, action, token, input });
+  }
+
   private sendFrame(
-    frame: { type: 'ack' | 'read'; id: string } | { type: 'response'; id: string; payload: unknown }
+    frame:
+      | { type: 'ack' | 'read'; id: string }
+      | { type: 'response'; id: string; payload: unknown }
+      | { type: 'action'; id: string; action: string; token: string; input?: unknown }
   ): void {
     if (!this.socket || this.currentState !== 'open') {
       return;
@@ -391,6 +413,22 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
     if (envelope === null || typeof envelope !== 'object' || typeof envelope.type !== 'string') {
       return;
     }
+
+    if (envelope.type === 'netifly.actionAck') {
+      const info = envelope.data as ActionAckInfo;
+      for (const handler of [...this.actionAckHandlers]) {
+        this.safely(() => handler(info));
+      }
+      return;
+    }
+    if (envelope.type === 'netifly.notification.resolved') {
+      const info = envelope.data as ResolvedInfo;
+      for (const handler of [...this.resolvedHandlers]) {
+        this.safely(() => handler(info));
+      }
+      return;
+    }
+
     if (typeof envelope.id === 'string' && !envelope.type.startsWith('netifly.')) {
       this.currentEventId = envelope.id;
     }
