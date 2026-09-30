@@ -7,7 +7,7 @@ export const MAX_TITLE_LENGTH = 120;
 export const MAX_BODY_LENGTH = 500;
 export const MAX_LINK_LABEL_LENGTH = 80;
 export const MAX_ACTIONS = 5;
-const MAX_ICON_LENGTH = 200;
+export const MAX_ICON_LENGTH = 200;
 const SEVERITIES = new Set(['info', 'success', 'warning', 'error']);
 const ACTION_STYLES = new Set(['primary', 'danger', 'default']);
 

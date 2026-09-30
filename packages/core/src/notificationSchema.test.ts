@@ -10,15 +10,17 @@ import type { InfoNotification } from './types';
  * fields) so this suite can assert the schema and the runtime validator
  * agree on accept/reject for the same inputs.
  */
+const infoSchema = notificationJsonSchema.oneOf[0];
+
 function checkAgainstSchema(notification: Record<string, unknown>): boolean {
-  for (const field of notificationJsonSchema.required) {
+  for (const field of infoSchema.required) {
     if (!(field in notification)) {
       return false;
     }
   }
 
   const title = notification.title;
-  const titleSchema = notificationJsonSchema.properties.title;
+  const titleSchema = infoSchema.properties.title;
   if (
     typeof title !== 'string' ||
     title.length < titleSchema.minLength ||
@@ -28,7 +30,7 @@ function checkAgainstSchema(notification: Record<string, unknown>): boolean {
   }
 
   const body = notification.body;
-  const bodySchema = notificationJsonSchema.properties.body;
+  const bodySchema = infoSchema.properties.body;
   if (
     typeof body !== 'string' ||
     body.length < bodySchema.minLength ||
@@ -38,7 +40,7 @@ function checkAgainstSchema(notification: Record<string, unknown>): boolean {
   }
 
   if ('severity' in notification && notification.severity !== undefined) {
-    const allowed: readonly string[] = notificationJsonSchema.properties.severity.enum;
+    const allowed: readonly string[] = infoSchema.properties.severity.enum;
     if (!allowed.includes(notification.severity as string)) {
       return false;
     }
