@@ -1897,5 +1897,48 @@ describe('createNetifly', () => {
       expect((await resolvedOnA).data).toEqual({ id: envelope.id, action: 'approve' });
       expect((await resolvedOnB).data).toEqual({ id: envelope.id, action: 'approve' });
     });
+
+    it('acks "invalid" and still emits "error" when transport.claim() rejects', async () => {
+      const secret = 'netiflyServer-action-claim-throws-secret';
+      const claimError = new Error('boom-claim');
+      const transport = {
+        ...memoryTransport(),
+        claim: async (): Promise<boolean> => {
+          throw claimError;
+        },
+      };
+      const server = await startTestServer(() => 'netiflyServer-action-claim-throws', {
+        actionSecret: secret,
+        transport,
+      });
+      servers.push(server);
+
+      const errors: Error[] = [];
+      server.netifly.on('error', (e) => errors.push(e));
+
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      await server.netifly.notify('netiflyServer-action-claim-throws', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      const ackPromise = nextMatchingMessage(ws, (e) => e.type === 'netifly.actionAck');
+      ws.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+
+      const ack = await ackPromise;
+      expect(ack.data).toEqual({ id: envelope.id, action: 'approve', status: 'invalid' });
+      await wait(50);
+      expect(errors).toContain(claimError);
+    });
   });
 });
