@@ -273,7 +273,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     const frame = parsed.frame;
 
     if (frame.type === 'action') {
-      void this.handleActionFrame(userId, ws, frame);
+      this.handleActionFrame(userId, ws, frame).catch((error: unknown) => this.emitError(error));
       return;
     }
 

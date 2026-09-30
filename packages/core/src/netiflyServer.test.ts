@@ -1635,9 +1635,10 @@ describe('createNetifly', () => {
       const server = await startTestServer(() => 'netiflyServer-action-user', { actionSecret: secret });
       servers.push(server);
 
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const wsA = await connectClient(server.port);
       clients.push(wsA);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
       const wsB = await connectClient(server.port);
       clients.push(wsB);
 
@@ -1691,9 +1692,10 @@ describe('createNetifly', () => {
       const secret = 'netiflyServer-action-tamper-secret';
       const server = await startTestServer(() => 'netiflyServer-action-tamper', { actionSecret: secret });
       servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const ws = await connectClient(server.port);
       clients.push(ws);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
 
       const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
       const actionCalls: unknown[] = [];
@@ -1726,9 +1728,10 @@ describe('createNetifly', () => {
       );
       servers.push(server);
 
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const wsOwner = await connectClientWithQuery(server.port, 'user=owner');
       clients.push(wsOwner);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
       const wsAttacker = await connectClientWithQuery(server.port, 'user=attacker');
       clients.push(wsAttacker);
 
@@ -1758,9 +1761,10 @@ describe('createNetifly', () => {
       const secret = 'netiflyServer-action-expired-secret';
       const server = await startTestServer(() => 'netiflyServer-action-expired', { actionSecret: secret });
       servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const ws = await connectClient(server.port);
       clients.push(ws);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
 
       const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
       await server.netifly.notify('netiflyServer-action-expired', {
@@ -1786,9 +1790,10 @@ describe('createNetifly', () => {
       const secret = 'netiflyServer-action-double-secret';
       const server = await startTestServer(() => 'netiflyServer-action-double', { actionSecret: secret });
       servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const ws = await connectClient(server.port);
       clients.push(ws);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
 
       const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
       const actionCalls: unknown[] = [];
@@ -1823,9 +1828,10 @@ describe('createNetifly', () => {
       const secret = 'netiflyServer-action-race-secret';
       const server = await startTestServer(() => 'netiflyServer-action-race', { actionSecret: secret });
       servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
       const wsA = await connectClient(server.port);
       clients.push(wsA);
-      await onceEvent(server.netifly, 'connect');
+      await connectedPromise;
       const wsB = await connectClient(server.port);
       clients.push(wsB);
 
@@ -1864,12 +1870,14 @@ describe('createNetifly', () => {
       const instanceB = await startTestServer(() => userId, { actionSecret: secret });
       servers.push(instanceB);
 
+      const connectedOnA = onceEvent(instanceA.netifly, 'connect');
       const wsA = await connectClient(instanceA.port);
       clients.push(wsA);
-      await onceEvent(instanceA.netifly, 'connect');
+      await connectedOnA;
+      const connectedOnB = onceEvent(instanceB.netifly, 'connect');
       const wsB = await connectClient(instanceB.port);
       clients.push(wsB);
-      await onceEvent(instanceB.netifly, 'connect');
+      await connectedOnB;
 
       const notificationOnA = nextMatchingMessage(wsA, (e) => e.type === 'notification');
       const actionOnB = onceInfo<{ userId: string; notificationId: string; actionId: string }>(
