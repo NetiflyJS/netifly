@@ -28,4 +28,21 @@ describe('memoryTransport', () => {
 
     await transport.close();
   });
+
+  it('claim() releases the key once ttlSeconds has elapsed', async () => {
+    const transport = memoryTransport();
+
+    const first = await transport.claim('memory-claim-ttl', 1);
+    expect(first).toBe(true);
+
+    const immediateRetry = await transport.claim('memory-claim-ttl', 1);
+    expect(immediateRetry).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const afterExpiry = await transport.claim('memory-claim-ttl', 1);
+    expect(afterExpiry).toBe(true);
+
+    await transport.close();
+  });
 });

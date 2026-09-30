@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { redisTransport, RedisTransportImpl, RedisTransportOptions, channelName } from './redisTransport';
 import { runTransportContractTests } from './transport.contract';
 import type { NetiflyTransport } from '../types';
@@ -116,6 +117,21 @@ describe('redisTransport', () => {
     await expect(
       otherNamespaced.receivers(['redisTransport-presence-namespaced'])
     ).resolves.toEqual({ 'redisTransport-presence-namespaced': 1 });
+  });
+
+  it('claim() is namespace-aware, matching subscribe/unsubscribe/publish/receivers', async () => {
+    const namespacedA = create({ namespace: 'redisTransport-claim-tenant-a' });
+    const defaultTransport = create();
+    // Unique per test run — claim() TTLs are real and outlive the test
+    // process, so a fixed literal key would collide with a still-live claim
+    // from a re-run of this suite moments earlier against a persistent Redis.
+    const key = `redisTransport-claim-shared-${randomUUID()}`;
+
+    const a = await namespacedA.claim(key, 60);
+    const b = await defaultTransport.claim(key, 60);
+
+    expect(a).toBe(true);
+    expect(b).toBe(true); // different namespace — does not contend with `a`'s claim
   });
 
   it('surfaces connection errors via onError instead of throwing', async () => {

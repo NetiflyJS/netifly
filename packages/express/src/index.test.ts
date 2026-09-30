@@ -25,6 +25,7 @@ describe('attachNetifly', () => {
     const { server, netifly } = attachNetifly(app, {
       resolveUserId: () => 'netiflyExpress-eve',
       redisUrl: REDIS_URL,
+      actionSecret: false,
     });
 
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -60,6 +61,7 @@ describe('attachNetifly', () => {
     const { server, netifly } = attachNetifly(app, {
       resolveUserId: () => null,
       redisUrl: REDIS_URL,
+      actionSecret: false,
       server: existingServer,
     });
 
@@ -73,6 +75,7 @@ describe('attachNetifly', () => {
     const { server, netifly } = attachNetifly(app, {
       resolveUserId: () => 'netiflyExpress-req-netifly',
       redisUrl: REDIS_URL,
+      actionSecret: false,
     });
 
     app.post('/notify', (req, res) => {

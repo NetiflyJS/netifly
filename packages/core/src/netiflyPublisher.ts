@@ -1,6 +1,9 @@
 import { EventEmitter } from 'node:events';
 import Redis from 'ioredis';
 import { monotonicFactory } from 'ulid';
+import { resolveActionSecret } from './actionSecret';
+import { buildActionWireNotification } from './actionToken';
+import { validateNotification } from './notification';
 import { disconnectRedis } from './redisDisconnect';
 import { channelName } from './transports/redisTransport';
 import { ENVELOPE_VERSION } from './types';
@@ -9,6 +12,7 @@ import type {
   Envelope,
   EventMap,
   NetiflyPublisher,
+  Notification,
   SendResult,
   SentInfo,
   UserId,
@@ -21,6 +25,7 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
   private readonly redis: Redis;
   private readonly namespace: string | undefined;
   private readonly validate: CreateNetiflyPublisherOptions<Events>['validate'];
+  private readonly actionSecret: string | undefined;
   private readonly ulid = monotonicFactory();
   private closed = false;
 
@@ -69,6 +74,7 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
     // good for serverless cold starts, where a publisher might be
     // constructed but never actually used in a given invocation.
     this.redis = new Redis(redisUrl, { lazyConnect: true });
+    this.actionSecret = resolveActionSecret(options.actionSecret);
   }
 
   private assertNotClosed(): void {
@@ -81,8 +87,8 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
     return channelName(userId, this.namespace);
   }
 
-  private buildEnvelope<T>(type: string, data: T): Envelope<T> {
-    return { v: ENVELOPE_VERSION, id: this.ulid(), type, data, ts: Date.now() };
+  private buildEnvelope<T>(type: string, data: T, id: string = this.ulid()): Envelope<T> {
+    return { v: ENVELOPE_VERSION, id, type, data, ts: Date.now() };
   }
 
   async send<T>(userId: UserId, payload: T): Promise<SendResult>;
@@ -99,7 +105,33 @@ class NetiflyPublisherImpl<Events extends EventMap = EventMap>
     // See the matching comment in netiflyServer.ts's sendInternal for why
     // this cast is needed at the call site.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
-    const envelope = this.buildEnvelope(type, data);
+    return this.publishEnvelope(userId, type, data);
+  }
+
+  async notify(userId: UserId, notification: Notification): Promise<SendResult> {
+    this.assertNotClosed();
+    validateNotification(notification);
+
+    if (notification.kind === 'action') {
+      if (this.actionSecret === undefined) {
+        throw new Error("Netifly: kind:'action' notifications are disabled (actionSecret: false).");
+      }
+      const id = this.ulid();
+      const wireData = buildActionWireNotification(notification, {
+        notificationId: id,
+        userId,
+        secret: this.actionSecret,
+      });
+      return this.publishEnvelope(userId, 'notification', wireData, id);
+    }
+
+    return this.publishEnvelope(userId, 'notification', notification);
+  }
+
+  // Shared by send() and notify() — deliberately does NOT run `this.validate`;
+  // see the matching comment on netiflyServer.ts's publishEnvelope() for why.
+  private async publishEnvelope<T>(userId: UserId, type: string, data: T, id?: string): Promise<SendResult> {
+    const envelope = this.buildEnvelope(type, data, id);
     this.emit('sent', {
       userId,
       id: envelope.id,

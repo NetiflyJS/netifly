@@ -78,4 +78,56 @@ describe('parseInboundFrame', () => {
       reason: 'invalidShape',
     });
   });
+
+  it('parses a valid action frame', () => {
+    const result = parseInboundFrame(
+      JSON.stringify({ type: 'action', id: 'notif-6', action: 'approve', token: 'abc.def' })
+    );
+    expect(result).toEqual({
+      ok: true,
+      frame: { type: 'action', id: 'notif-6', action: 'approve', token: 'abc.def', input: undefined },
+    });
+  });
+
+  it('parses a valid action frame with input', () => {
+    const result = parseInboundFrame(
+      JSON.stringify({
+        type: 'action',
+        id: 'notif-7',
+        action: 'reject',
+        token: 'abc.def',
+        input: 'because',
+      })
+    );
+    expect(result).toEqual({
+      ok: true,
+      frame: { type: 'action', id: 'notif-7', action: 'reject', token: 'abc.def', input: 'because' },
+    });
+  });
+
+  it('rejects an action frame missing the action key', () => {
+    expect(parseInboundFrame(JSON.stringify({ type: 'action', id: 'x', token: 'abc.def' }))).toEqual({
+      ok: false,
+      reason: 'invalidShape',
+    });
+  });
+
+  it('rejects an action frame missing the token key', () => {
+    expect(parseInboundFrame(JSON.stringify({ type: 'action', id: 'x', action: 'approve' }))).toEqual({
+      ok: false,
+      reason: 'invalidShape',
+    });
+  });
+
+  it('rejects an action frame with a non-string action', () => {
+    expect(
+      parseInboundFrame(JSON.stringify({ type: 'action', id: 'x', action: 42, token: 'abc.def' }))
+    ).toEqual({ ok: false, reason: 'invalidShape' });
+  });
+
+  it('rejects an action frame with an empty-string token', () => {
+    expect(
+      parseInboundFrame(JSON.stringify({ type: 'action', id: 'x', action: 'approve', token: '' }))
+    ).toEqual({ ok: false, reason: 'invalidShape' });
+  });
 });

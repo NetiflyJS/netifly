@@ -51,6 +51,10 @@ export class RefCountedTransport implements NetiflyTransport {
     return this.raw.receivers(userIds);
   }
 
+  claim(key: string, ttlSeconds: number): Promise<boolean> {
+    return this.raw.claim(key, ttlSeconds);
+  }
+
   onMessage(cb: (userId: UserId, message: string) => void): void {
     this.raw.onMessage(cb);
   }

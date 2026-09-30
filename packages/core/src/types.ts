@@ -61,6 +61,16 @@ export interface NetiflyTransport {
   publish(userId: UserId, message: string): Promise<{ receivers: number }>;
   /** Batched presence check — `isOnline`/`whoIsOnline` both route through this. Resolves `{}` for an empty array. */
   receivers(userIds: UserId[]): Promise<Record<UserId, number>>;
+  /**
+   * Atomically claims `key` for `ttlSeconds`: the first caller to succeed
+   * gets `true`; every other caller (same or a different transport
+   * instance/process) gets `false` until the claim expires. `key` is an
+   * opaque caller-chosen string — this method assigns it no structure or
+   * namespace of its own, same as `userId` elsewhere on this interface.
+   * Introduced for actionable notifications' exactly-once "answered" lock
+   * (NOT-38 spec §6), but not itself specific to that use.
+   */
+  claim(key: string, ttlSeconds: number): Promise<boolean>;
   /** Registers the single callback invoked for every message this transport receives. */
   onMessage(cb: (userId: UserId, message: string) => void): void;
   /** Registers the single callback invoked for background/connection errors. */
@@ -129,6 +139,13 @@ export interface CreateNetiflyOptions<Events extends EventMap = EventMap> {
    * `sendOr()` call (it is not caught or wrapped).
    */
   validate?: <K extends keyof Events & string>(type: K, data: Events[K]) => void;
+  /**
+   * HMAC secret used to sign kind:'action' notification tokens. Falls back
+   * to the NETIFLY_SECRET environment variable. Required unless explicitly
+   * set to `false`, in which case createNetifly() starts normally but any
+   * notify() call with kind:'action' throws.
+   */
+  actionSecret?: string | false;
 }
 
 /** Emitted via the `reject` event when an upgrade is rejected. */
@@ -218,6 +235,60 @@ export interface SendOrOptions {
   offline: () => void | Promise<void>;
 }
 
+export interface NotificationLink {
+  href: string;
+  label: string;
+}
+
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
+
+export interface InfoNotification {
+  kind: 'info';
+  title: string;
+  body: string;
+  severity?: NotificationSeverity;
+  link?: NotificationLink;
+  icon?: string;
+  expiresAt?: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface NotificationAction {
+  id: string;
+  label: string;
+  style?: 'primary' | 'danger' | 'default';
+  input?: { type: 'text'; placeholder?: string };
+}
+
+export interface ActionNotification {
+  kind: 'action';
+  title: string;
+  body: string;
+  actions: NotificationAction[]; // 1..5, ids unique — see notification.ts
+  expiresAt: number; // required — bounds the signed token's validity and the Redis answered-lock TTL
+  context?: Record<string, unknown>; // signed into each action's token; never a plain wire field, see actionToken.ts
+  meta?: Record<string, unknown>;
+}
+
+/** The shape `notify()`/`notifyOr()` accept. */
+export type Notification = InfoNotification | ActionNotification;
+
+/** What a client actually receives on the wire — action notifications carry a signed, opaque token per action instead of raw context. */
+export type WireNotification =
+  | InfoNotification
+  | (Omit<ActionNotification, 'actions' | 'context'> & {
+      actions: (NotificationAction & { token: string })[];
+    });
+
+/** Payload for `NetiflyInstance.on('action', ...)` — an answered action notification. */
+export interface ActionInfo {
+  userId: UserId;
+  notificationId: string;
+  actionId: string;
+  input?: unknown;
+  context?: Record<string, unknown>;
+}
+
 export interface NetiflyInstance<Events extends EventMap = EventMap> {
   send<T>(userId: UserId, payload: T): Promise<SendResult>;
   send<K extends keyof Events & string>(userId: UserId, type: K, data: Events[K]): Promise<SendResult>;
@@ -233,6 +304,13 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
     data: Events[K],
     options: SendOrOptions
   ): Promise<SendResult>;
+  notify(userId: UserId, notification: Notification): Promise<SendResult>;
+  /**
+   * Like `notify()`, but calls (and awaits) `options.offline()` when the
+   * notification wasn't delivered to any connection anywhere in the
+   * cluster. Resolves with the same `SendResult` either way.
+   */
+  notifyOr(userId: UserId, notification: Notification, options: SendOrOptions): Promise<SendResult>;
   disconnect(userId: UserId): void;
   on(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
@@ -241,6 +319,10 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   on(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
   on(event: 'response', listener: (info: ResponseInfo) => void): this;
   on(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  on(
+    event: 'action',
+    listener: (info: ActionInfo) => void
+  ): this;
   on(event: 'sent', listener: (info: SentInfo) => void): this;
   once(event: 'connect' | 'disconnect', listener: (userId: UserId) => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
@@ -249,6 +331,10 @@ export interface NetiflyInstance<Events extends EventMap = EventMap> {
   once(event: 'delivered' | 'read', listener: (info: AckInfo) => void): this;
   once(event: 'response', listener: (info: ResponseInfo) => void): this;
   once(event: 'malformedFrame', listener: (info: MalformedFrameInfo) => void): this;
+  once(
+    event: 'action',
+    listener: (info: ActionInfo) => void
+  ): this;
   once(event: 'sent', listener: (info: SentInfo) => void): this;
   close(options?: CloseOptions): Promise<void>;
   /**
@@ -291,6 +377,8 @@ export interface CreateNetiflyPublisherOptions<Events extends EventMap = EventMa
    * and propagates straight out of `send()`.
    */
   validate?: <K extends keyof Events & string>(type: K, data: Events[K]) => void;
+  /** Same actionSecret resolution as CreateNetiflyOptions — see there for details. */
+  actionSecret?: string | false;
 }
 
 /**
@@ -307,6 +395,7 @@ export interface CreateNetiflyPublisherOptions<Events extends EventMap = EventMa
 export interface NetiflyPublisher<Events extends EventMap = EventMap> {
   send<T>(userId: UserId, payload: T): Promise<SendResult>;
   send<K extends keyof Events & string>(userId: UserId, type: K, data: Events[K]): Promise<SendResult>;
+  notify(userId: UserId, notification: Notification): Promise<SendResult>;
   /** Fires synchronously inside send(), with the generated envelope id, before publishing. */
   on(event: 'sent', listener: (info: SentInfo) => void): this;
   once(event: 'sent', listener: (info: SentInfo) => void): this;
