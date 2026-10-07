@@ -1,3 +1,19 @@
+# [@netiflyjs/express-v2.0.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.5.0...@netiflyjs/express-v2.0.0) (2026-10-07)
+
+
+### Features
+
+* **core:** actionable notifications — verified answers, 'action' event, resolved relay (NOT-38) ([60617cd](https://github.com/NetiflyJS/netifly/commit/60617cd79e2b4e92ad2fe4fd5d9689254bc7669d))
+
+
+### BREAKING CHANGES
+
+* **core:** createNetifly()/createNetiflyPublisher() now throw at
+construction unless actionSecret or NETIFLY_SECRET is set, or
+actionSecret: false is passed explicitly.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
 # [@netiflyjs/express-v1.5.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/express-v1.4.0...@netiflyjs/express-v1.5.0) (2026-09-26)
 
 
