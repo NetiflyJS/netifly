@@ -1,8 +1,9 @@
-/** A validated client → server control frame (see NOT-30 spec §5). */
+/** A validated client → server control frame (see NOT-30 spec §5, NOT-38 spec §6 for 'action'). */
 export type InboundFrame =
   | { type: 'ack'; id: string }
   | { type: 'read'; id: string }
-  | { type: 'response'; id: string; payload: unknown };
+  | { type: 'response'; id: string; payload: unknown }
+  | { type: 'action'; id: string; action: string; token: string; input?: unknown };
 
 export type InboundFrameParseFailureReason = 'invalidJson' | 'invalidShape';
 
@@ -44,6 +45,14 @@ export function parseInboundFrame(raw: string): ParsedInboundFrame {
       return { ok: false, reason: 'invalidShape' };
     }
     return { ok: true, frame: { type: 'response', id, payload: (value as { payload: unknown }).payload } };
+  }
+
+  if (type === 'action') {
+    const { action, token, input } = value as { action?: unknown; token?: unknown; input?: unknown };
+    if (typeof action !== 'string' || action.length === 0 || typeof token !== 'string' || token.length === 0) {
+      return { ok: false, reason: 'invalidShape' };
+    }
+    return { ok: true, frame: { type: 'action', id, action, token, input } };
   }
 
   return { ok: false, reason: 'invalidShape' };

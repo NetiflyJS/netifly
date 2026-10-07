@@ -8,6 +8,8 @@ import { ConnectionRegistry } from './connectionRegistry';
 import { RefCountedTransport } from './transports/refCountedTransport';
 import { channelName } from './transports/redisTransport';
 import type { CloseOptions, CreateNetiflyOptions, DroppedInfo, NetiflyInstance, RejectInfo } from './types';
+import { NotificationValidationError } from './notification';
+import { verifyActionToken } from './actionToken';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -38,6 +40,7 @@ async function startTestServer(
     server: httpServer,
     resolveUserId: resolveUserId as never,
     redisUrl: REDIS_URL,
+    actionSecret: false,
     ...extra,
   });
 
@@ -57,6 +60,14 @@ async function startTestServer(
 function connectClient(port: number, options?: WebSocket.ClientOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly`, options);
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+}
+
+function connectClientWithQuery(port: number, query: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/netifly?${query}`);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
@@ -98,8 +109,8 @@ function nextMessage(ws: WebSocket): Promise<string> {
 // in the same parse burst.
 function nextMatchingMessage(
   ws: WebSocket,
-  predicate: (envelope: { type: string; data: unknown }) => boolean
-): Promise<{ type: string; data: unknown }> {
+  predicate: (envelope: { id: string; type: string; data: unknown }) => boolean
+): Promise<{ id: string; type: string; data: unknown }> {
   return new Promise((resolve) => {
     const handler = (data: WebSocket.RawData) => {
       const envelope = JSON.parse(data.toString());
@@ -658,6 +669,52 @@ describe('createNetifly', () => {
     servers.pop(); // already closed above; skip afterEach double-close
 
     expect(await clientClosePromise).toBe(1012);
+  });
+
+  // The drain race in close() starts a `setTimeout(resolve, drainMs)` to bound
+  // how long it waits for clients to finish their closing handshake. When
+  // every client closes gracefully well before drainMs, `Promise.race` picks
+  // the drain side and returns — but the timer itself was never cancelled, so
+  // it keeps the event loop (and, in tests, Jest) alive until drainMs
+  // eventually elapses. Found via `--detectOpenHandles`; mirrors the fix
+  // already applied to `disconnectRedis` in redisDisconnect.ts.
+  it('clears the drain timer once every client closes gracefully, instead of leaking it until drainMs elapses (NOT-19)', async () => {
+    const server = await startTestServer(() => 'netiflyServer-close-clears-drain-timer');
+    servers.push(server);
+
+    const connectedPromise = onceEvent(server.netifly, 'connect');
+    const client = await connectClient(server.port);
+    clients.push(client);
+    await connectedPromise;
+
+    // Distinctive drainMs so the drain timer can be picked out from any other
+    // setTimeout calls (e.g. inside `ws` itself) sharing the same spies.
+    const DRAIN_MS = 60_000;
+    let drainTimer: NodeJS.Timeout | undefined;
+    const originalSetTimeout = global.setTimeout;
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((
+      fn: (...args: unknown[]) => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      const timer = originalSetTimeout(fn, ms, ...args);
+      if (ms === DRAIN_MS) drainTimer = timer;
+      return timer;
+    }) as typeof setTimeout);
+    const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+    try {
+      // A large drainMs that would keep the process alive for its full
+      // duration if the drain race's timer were never cleared — the client
+      // closes gracefully almost immediately, well before this could fire.
+      await server.close({ drainMs: DRAIN_MS });
+      servers.pop(); // already closed above; skip afterEach double-close
+
+      expect(drainTimer).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(drainTimer);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
   });
 
   // NOT-19: a client that never completes the closing handshake (e.g. dead
@@ -1484,5 +1541,458 @@ describe('createNetifly', () => {
     await wait(100);
 
     expect(calls).toHaveLength(1);
+  });
+
+  describe('notify()', () => {
+    it('publishes a valid info notification and resolves with SendResult', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-user');
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      const result = await server.netifly.notify('netiflyServer-notify-user', {
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Your report has finished generating.',
+      });
+
+      expect(result).toEqual({ delivered: true, instances: 1 });
+      const envelope = await notificationPromise;
+      expect(envelope.data).toEqual({
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Your report has finished generating.',
+      });
+    });
+
+    it('rejects an invalid notification without publishing anything', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-invalid');
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const messages: unknown[] = [];
+      ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
+
+      await expect(
+        server.netifly.notify('netiflyServer-notify-invalid', { kind: 'info', title: '', body: 'x' })
+      ).rejects.toThrow(NotificationValidationError);
+
+      await wait(50);
+      expect(messages).toHaveLength(0);
+    });
+
+    it('does not run the app-level validate hook for notify()', async () => {
+      const validate = jest.fn();
+      const server = await startTestServer(() => 'netiflyServer-notify-no-app-validate', { validate });
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      await server.netifly.notify('netiflyServer-notify-no-app-validate', {
+        kind: 'info',
+        title: 'Export ready',
+        body: 'Done.',
+      });
+      expect(validate).not.toHaveBeenCalled();
+    });
+
+    it('notifyOr() calls offline() when nobody is connected', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-anyone');
+      servers.push(server);
+
+      const offline = jest.fn();
+      const result = await server.netifly.notifyOr(
+        'netiflyServer-notify-nobody-home',
+        { kind: 'info', title: 'Export ready', body: 'Done.' },
+        { offline }
+      );
+
+      expect(result.delivered).toBe(false);
+      expect(offline).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws after close(), same as send()', async () => {
+      const server = await startTestServer(() => 'netiflyServer-notify-after-close');
+      await server.close();
+
+      await expect(
+        server.netifly.notify('netiflyServer-notify-after-close', {
+          kind: 'info',
+          title: 'Export ready',
+          body: 'Done.',
+        })
+      ).rejects.toThrow('Netifly: cannot send after close()');
+    });
+  });
+
+  describe('actionSecret', () => {
+    it('throws at construction when neither actionSecret nor NETIFLY_SECRET is set', () => {
+      const original = process.env.NETIFLY_SECRET;
+      delete process.env.NETIFLY_SECRET;
+      const httpServer = http.createServer();
+      try {
+        expect(() =>
+          createNetifly({
+            server: httpServer,
+            resolveUserId: () => 'x',
+            redisUrl: REDIS_URL,
+          })
+        ).toThrow('Netifly: no actionSecret provided and NETIFLY_SECRET is not set');
+      } finally {
+        if (original !== undefined) process.env.NETIFLY_SECRET = original;
+      }
+    });
+
+    it('does not throw at construction when actionSecret: false is passed explicitly', async () => {
+      const server = await startTestServer(() => 'netiflyServer-action-disabled-construct', {
+        actionSecret: false,
+      });
+      servers.push(server);
+      expect(server.netifly).toBeDefined();
+    });
+
+    it("notify(kind:'action') throws when actionSecret: false was passed", async () => {
+      const server = await startTestServer(() => 'netiflyServer-action-disabled-notify');
+      servers.push(server);
+
+      await expect(
+        server.netifly.notify('netiflyServer-action-disabled-notify', {
+          kind: 'action',
+          title: 'Approve?',
+          body: 'x',
+          actions: [{ id: 'approve', label: 'Approve' }],
+          expiresAt: Date.now() + 60_000,
+        })
+      ).rejects.toThrow("Netifly: kind:'action' notifications are disabled");
+    });
+  });
+
+  describe("notify(kind:'action') and answering it", () => {
+    it('delivers actions with signed tokens; a valid answer fires action, resolves both devices, and acks accepted', async () => {
+      const secret = 'netiflyServer-action-secret';
+      const server = await startTestServer(() => 'netiflyServer-action-user', { actionSecret: secret });
+      servers.push(server);
+
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const wsA = await connectClient(server.port);
+      clients.push(wsA);
+      await connectedPromise;
+      const wsB = await connectClient(server.port);
+      clients.push(wsB);
+
+      const notificationPromise = nextMatchingMessage(wsA, (e) => e.type === 'notification');
+      const actionPromise = onceInfo<{
+        userId: string;
+        notificationId: string;
+        actionId: string;
+        input?: unknown;
+        context?: Record<string, unknown>;
+      }>(server.netifly, 'action');
+      const resolvedOnA = nextMatchingMessage(wsA, (e) => e.type === 'netifly.notification.resolved');
+      const resolvedOnB = nextMatchingMessage(wsB, (e) => e.type === 'netifly.notification.resolved');
+
+      await server.netifly.notify('netiflyServer-action-user', {
+        kind: 'action',
+        title: 'Approve expense £420?',
+        body: 'Submitted by Sam',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+        context: { expenseId: 'exp_123' },
+      });
+
+      const envelope = await notificationPromise;
+      const data = envelope.data as { actions: { id: string; token: string }[] };
+      const token = data.actions[0].token;
+      expect(verifyActionToken(token, secret).ok).toBe(true);
+
+      const ackPromise = nextMatchingMessage(wsA, (e) => e.type === 'netifly.actionAck');
+      wsA.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+
+      const info = await actionPromise;
+      expect(info).toEqual({
+        userId: 'netiflyServer-action-user',
+        notificationId: envelope.id,
+        actionId: 'approve',
+        input: undefined,
+        context: { expenseId: 'exp_123' },
+      });
+
+      const ack = await ackPromise;
+      expect(ack.data).toEqual({ id: envelope.id, action: 'approve', status: 'accepted' });
+
+      const resolvedA = await resolvedOnA;
+      const resolvedB = await resolvedOnB;
+      expect(resolvedA.data).toEqual({ id: envelope.id, action: 'approve' });
+      expect(resolvedB.data).toEqual({ id: envelope.id, action: 'approve' });
+    });
+
+    it('rejects a tampered token as invalid', async () => {
+      const secret = 'netiflyServer-action-tamper-secret';
+      const server = await startTestServer(() => 'netiflyServer-action-tamper', { actionSecret: secret });
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      const actionCalls: unknown[] = [];
+      server.netifly.on('action', (info) => actionCalls.push(info));
+
+      await server.netifly.notify('netiflyServer-action-tamper', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+      const tamperedToken = `${token}garbage`;
+
+      const ackPromise = nextMatchingMessage(ws, (e) => e.type === 'netifly.actionAck');
+      ws.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token: tamperedToken }));
+
+      const ack = await ackPromise;
+      expect(ack.data).toEqual({ id: envelope.id, action: 'approve', status: 'invalid' });
+      expect(actionCalls).toHaveLength(0);
+    });
+
+    it("rejects a token answered by a different user's socket as invalid", async () => {
+      const secret = 'netiflyServer-action-wronguser-secret';
+      const server = await startTestServer(
+        (req) => new URL(req.url ?? '', 'http://localhost').searchParams.get('user'),
+        { actionSecret: secret }
+      );
+      servers.push(server);
+
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const wsOwner = await connectClientWithQuery(server.port, 'user=owner');
+      clients.push(wsOwner);
+      await connectedPromise;
+      const wsAttacker = await connectClientWithQuery(server.port, 'user=attacker');
+      clients.push(wsAttacker);
+
+      const notificationPromise = nextMatchingMessage(wsOwner, (e) => e.type === 'notification');
+      const actionCalls: unknown[] = [];
+      server.netifly.on('action', (info) => actionCalls.push(info));
+
+      await server.netifly.notify('owner', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      const ackPromise = nextMatchingMessage(wsAttacker, (e) => e.type === 'netifly.actionAck');
+      wsAttacker.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+
+      const ack = await ackPromise;
+      expect(ack.data).toEqual({ id: envelope.id, action: 'approve', status: 'invalid' });
+      expect(actionCalls).toHaveLength(0);
+    });
+
+    it('rejects an expired token', async () => {
+      const secret = 'netiflyServer-action-expired-secret';
+      const server = await startTestServer(() => 'netiflyServer-action-expired', { actionSecret: secret });
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      await server.netifly.notify('netiflyServer-action-expired', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 200,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      await wait(300);
+
+      const ackPromise = nextMatchingMessage(ws, (e) => e.type === 'netifly.actionAck');
+      ws.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+
+      const ack = await ackPromise;
+      expect(ack.data).toEqual({ id: envelope.id, action: 'approve', status: 'expired' });
+    });
+
+    it('rejects a second answer to an already-answered notification', async () => {
+      const secret = 'netiflyServer-action-double-secret';
+      const server = await startTestServer(() => 'netiflyServer-action-double', { actionSecret: secret });
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      const actionCalls: unknown[] = [];
+      server.netifly.on('action', (info) => actionCalls.push(info));
+
+      await server.netifly.notify('netiflyServer-action-double', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      const firstAck = nextMatchingMessage(ws, (e) => e.type === 'netifly.actionAck');
+      ws.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+      expect((await firstAck).data).toEqual({ id: envelope.id, action: 'approve', status: 'accepted' });
+
+      const secondAck = nextMatchingMessage(ws, (e) => e.type === 'netifly.actionAck');
+      ws.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+      expect((await secondAck).data).toEqual({
+        id: envelope.id,
+        action: 'approve',
+        status: 'already_answered',
+      });
+
+      expect(actionCalls).toHaveLength(1);
+    });
+
+    it('two devices answering the same action concurrently: exactly one action event, both resolved', async () => {
+      const secret = 'netiflyServer-action-race-secret';
+      const server = await startTestServer(() => 'netiflyServer-action-race', { actionSecret: secret });
+      servers.push(server);
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const wsA = await connectClient(server.port);
+      clients.push(wsA);
+      await connectedPromise;
+      const wsB = await connectClient(server.port);
+      clients.push(wsB);
+
+      const notificationPromise = nextMatchingMessage(wsA, (e) => e.type === 'notification');
+      const actionCalls: unknown[] = [];
+      server.netifly.on('action', (info) => actionCalls.push(info));
+
+      await server.netifly.notify('netiflyServer-action-race', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      const ackA = nextMatchingMessage(wsA, (e) => e.type === 'netifly.actionAck');
+      const ackB = nextMatchingMessage(wsB, (e) => e.type === 'netifly.actionAck');
+      const frame = JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token });
+      wsA.send(frame);
+      wsB.send(frame);
+
+      const statuses = [(await ackA).data, (await ackB).data].map(
+        (d) => (d as { status: string }).status
+      );
+      expect(statuses.sort()).toEqual(['accepted', 'already_answered']);
+      expect(actionCalls).toHaveLength(1);
+    });
+
+    it('multi-instance: notify() from instance A, answered on instance B, both see the resolved relay', async () => {
+      const secret = 'netiflyServer-action-multiinstance-secret';
+      const userId = 'netiflyServer-action-multiinstance';
+      const instanceA = await startTestServer(() => userId, { actionSecret: secret });
+      servers.push(instanceA);
+      const instanceB = await startTestServer(() => userId, { actionSecret: secret });
+      servers.push(instanceB);
+
+      const connectedOnA = onceEvent(instanceA.netifly, 'connect');
+      const wsA = await connectClient(instanceA.port);
+      clients.push(wsA);
+      await connectedOnA;
+      const connectedOnB = onceEvent(instanceB.netifly, 'connect');
+      const wsB = await connectClient(instanceB.port);
+      clients.push(wsB);
+      await connectedOnB;
+
+      const notificationOnA = nextMatchingMessage(wsA, (e) => e.type === 'notification');
+      const actionOnB = onceInfo<{ userId: string; notificationId: string; actionId: string }>(
+        instanceB.netifly,
+        'action'
+      );
+      const resolvedOnA = nextMatchingMessage(wsA, (e) => e.type === 'netifly.notification.resolved');
+      const resolvedOnB = nextMatchingMessage(wsB, (e) => e.type === 'netifly.notification.resolved');
+
+      await instanceA.netifly.notify(userId, {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationOnA;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      const ackOnB = nextMatchingMessage(wsB, (e) => e.type === 'netifly.actionAck');
+      wsB.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+
+      expect((await ackOnB).data).toEqual({ id: envelope.id, action: 'approve', status: 'accepted' });
+      expect(await actionOnB).toEqual({ userId, notificationId: envelope.id, actionId: 'approve' });
+      expect((await resolvedOnA).data).toEqual({ id: envelope.id, action: 'approve' });
+      expect((await resolvedOnB).data).toEqual({ id: envelope.id, action: 'approve' });
+    });
+
+    it('acks "invalid" and still emits "error" when transport.claim() rejects', async () => {
+      const secret = 'netiflyServer-action-claim-throws-secret';
+      const claimError = new Error('boom-claim');
+      const transport = {
+        ...memoryTransport(),
+        claim: async (): Promise<boolean> => {
+          throw claimError;
+        },
+      };
+      const server = await startTestServer(() => 'netiflyServer-action-claim-throws', {
+        actionSecret: secret,
+        transport,
+      });
+      servers.push(server);
+
+      const errors: Error[] = [];
+      server.netifly.on('error', (e) => errors.push(e));
+
+      const connectedPromise = onceEvent(server.netifly, 'connect');
+      const ws = await connectClient(server.port);
+      clients.push(ws);
+      await connectedPromise;
+
+      const notificationPromise = nextMatchingMessage(ws, (e) => e.type === 'notification');
+      await server.netifly.notify('netiflyServer-action-claim-throws', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const envelope = await notificationPromise;
+      const token = (envelope.data as { actions: { token: string }[] }).actions[0].token;
+
+      const ackPromise = nextMatchingMessage(ws, (e) => e.type === 'netifly.actionAck');
+      ws.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
+
+      const ack = await ackPromise;
+      expect(ack.data).toEqual({ id: envelope.id, action: 'approve', status: 'invalid' });
+      await wait(50);
+      expect(errors).toContain(claimError);
+    });
   });
 });

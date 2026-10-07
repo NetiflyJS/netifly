@@ -4,7 +4,7 @@
 
 **Goal:** Extend `notify()` with `kind: 'action'` — CTA buttons whose answers are cryptographically verified (signed, stateless HMAC tokens) and routed to the app via a new `'action'` event, with exactly-once "answered" semantics enforced by a Redis lock.
 
-**Architecture:** A new `actionToken.ts` module owns token signing/verification and building the wire-safe action array (tokens embed `context` so it survives to whichever instance answers it, with no persistence). A new `actionSecret.ts` module owns resolving/validating the signing secret at construction time. `RedisRouter` gains one new primitive (`tryLockAnswered`) reusing its existing plain publisher client. `NetiflyServerImpl` gains a dedicated inbound-frame branch (`handleActionFrame`) that verifies, locks, emits `'action'` exactly once, relays `netifly.notification.resolved` to the user's other connections, and acks the answering socket directly with `netifly.actionAck`. `NetiflyPublisherImpl` gains the same secret + token-signing half (it can originate an action notification, but never receives the answer — that's a `NetiflyInstance`-only concern). `@netiflyjs/client` gains `respondToAction()`/`onActionAck()`/`onResolved()`.
+**Architecture:** A new `actionToken.ts` module owns token signing/verification and building the wire-safe action array (tokens embed `context` so it survives to whichever instance answers it, with no persistence). A new `actionSecret.ts` module owns resolving/validating the signing secret at construction time. The `NetiflyTransport` interface (post-NOT-20's transport-abstraction refactor) gains one new primitive — `claim(key, ttlSeconds)` — implemented in both `redisTransport()` (Redis `SET NX EX`) and `memoryTransport()` (an in-process TTL map), so the answered-lock works under either transport. `NetiflyServerImpl` gains a dedicated inbound-frame branch (`handleActionFrame`) that verifies, claims, emits `'action'` exactly once, relays `netifly.notification.resolved` to the user's other connections, and acks the answering socket directly with `netifly.actionAck`. `NetiflyPublisherImpl` gains the same secret + token-signing half (it can originate an action notification, but never receives the answer — that's a `NetiflyInstance`-only concern; it still talks to Redis directly, unaffected by the transport abstraction). `@netiflyjs/client` gains `respondToAction()`/`onActionAck()`/`onResolved()`.
 
 **Depends on:** [NOT-37's plan](./2026-09-29-notify-one-way-notifications.md) must be implemented and merged first — this plan's Task 1 widens the `Notification`/`WireNotification` types and `validateNotification()` that NOT-37 introduces, and every later task builds on NOT-37's `notify()`/`notifyOr()` plumbing.
 
@@ -40,7 +40,7 @@
 **Files:**
 - Modify: `packages/core/src/types.ts`
 - Modify: `packages/core/src/notification.ts` (full rewrite of the file's contents)
-- Modify: `packages/core/src/notification.test.ts` (append new cases)
+- Modify: `packages/core/src/notification.test.ts` (full rewrite — see the base-state note before Step 1; preserves all existing cases, adds `kind: 'action'` coverage)
 
 **Interfaces:**
 - Consumes: `InfoNotification`, `Notification` (= `InfoNotification` only), `NotificationValidationError`, `validateNotification` from NOT-37's Task 1.
@@ -121,7 +121,9 @@ and mirror it in the file's `once(...)` block, right after the existing `once(ev
   ): this;
 ```
 
-Now rewrite `packages/core/src/notification.test.ts` in full (adds `kind: 'action'` coverage alongside the existing `kind: 'info'` cases):
+**⚠️ This step's "before" state changed since this plan was written.** A prior plan (NOT-37) shipped, went through a final-branch review, and picked up a fix-round commit (`3a4e15f`) that added things this plan's original text doesn't know about: a top-level `null`/non-object guard, exported `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH` constants, a corrected `isSafeLinkHref()` (resolve-and-compare-origin, replacing an earlier `startsWith('//')` check that a security review found bypassable), and new `icon`/`expiresAt`/`meta` validation for `kind: 'info'`. The controller re-read the actual current `packages/core/src/notification.ts` and `notification.test.ts` and rewrote this step to build on top of that real file rather than the older one this plan was originally drafted against — **follow the version below, not a from-memory recollection of an earlier draft.** The existing test `"rejects kind: 'action' (not supported by this version of notify())"` no longer holds (this plan makes `kind: 'action'` valid) and is removed below, replaced by `"rejects an unrecognized kind"` using a nonsense kind value instead.
+
+Rewrite `packages/core/src/notification.test.ts` in full (preserves every existing `kind: 'info'` case — including the `null`/undefined-notification guards, the 11-vector unsafe-href table, and the `icon`/`expiresAt`/`meta` cases already in the file from NOT-37's fix round — and adds `kind: 'action'` coverage):
 
 ```ts
 import { NotificationValidationError, validateNotification } from './notification';
@@ -143,6 +145,18 @@ function baseAction(overrides: Partial<ActionNotification> = {}): ActionNotifica
 }
 
 describe('validateNotification: kind: info', () => {
+  it('rejects a null notification', () => {
+    expect(() => validateNotification(null as unknown as InfoNotification)).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('rejects an undefined notification', () => {
+    expect(() => validateNotification(undefined as unknown as InfoNotification)).toThrow(
+      NotificationValidationError
+    );
+  });
+
   it('accepts a minimal valid notification', () => {
     expect(() => validateNotification(baseInfo())).not.toThrow();
   });
@@ -210,14 +224,29 @@ describe('validateNotification: kind: info', () => {
     ).not.toThrow();
   });
 
-  it.each(['javascript:alert(1)', 'data:text/html,x', 'vbscript:msgbox(1)', 'not a url'])(
-    'rejects an unsafe link href: %s',
-    (href) => {
-      expect(() => validateNotification(baseInfo({ link: { href, label: 'Open' } }))).toThrow(
-        NotificationValidationError
-      );
-    }
-  );
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,x',
+    'vbscript:msgbox(1)',
+    'not a url',
+    '//evil.com/path',
+    '///evil.com',
+    '/\\evil.com',
+    '/\\/evil.com',
+    '/\t/evil.com',
+    '/\n/evil.com',
+    '/\r/evil.com',
+  ])('rejects an unsafe link href: %s', (href) => {
+    expect(() =>
+      validateNotification(baseInfo({ link: { href, label: 'Open' } }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a null link (non-TS caller)', () => {
+    expect(() =>
+      validateNotification(baseInfo({ link: null as unknown as InfoNotification['link'] }))
+    ).toThrow(NotificationValidationError);
+  });
 
   it('rejects a link.href that is not a string (non-TS caller)', () => {
     expect(() =>
@@ -244,6 +273,66 @@ describe('validateNotification: kind: info', () => {
   it('rejects a link label over 80 characters', () => {
     expect(() =>
       validateNotification(baseInfo({ link: { href: '/x', label: 'x'.repeat(81) } }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('accepts a valid icon', () => {
+    expect(() => validateNotification(baseInfo({ icon: 'bell' }))).not.toThrow();
+  });
+
+  it('rejects a non-string icon', () => {
+    expect(() =>
+      validateNotification(baseInfo({ icon: 42 as unknown as string }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an icon over 200 characters', () => {
+    expect(() => validateNotification(baseInfo({ icon: 'x'.repeat(201) }))).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('accepts a valid expiresAt', () => {
+    expect(() =>
+      validateNotification(baseInfo({ expiresAt: Date.now() + 1000 }))
+    ).not.toThrow();
+  });
+
+  it('rejects a non-number expiresAt', () => {
+    expect(() =>
+      validateNotification(baseInfo({ expiresAt: 'soon' as unknown as number }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a NaN expiresAt', () => {
+    expect(() => validateNotification(baseInfo({ expiresAt: NaN }))).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an Infinity expiresAt', () => {
+    expect(() => validateNotification(baseInfo({ expiresAt: Infinity }))).toThrow(
+      NotificationValidationError
+    );
+  });
+
+  it('accepts a valid meta object', () => {
+    expect(() => validateNotification(baseInfo({ meta: { orderId: 'abc123' } }))).not.toThrow();
+  });
+
+  it('rejects a null meta', () => {
+    expect(() =>
+      validateNotification(baseInfo({ meta: null as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects an array meta', () => {
+    expect(() =>
+      validateNotification(baseInfo({ meta: [1, 2, 3] as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('rejects a primitive meta', () => {
+    expect(() =>
+      validateNotification(baseInfo({ meta: 'x' as unknown as Record<string, unknown> }))
     ).toThrow(NotificationValidationError);
   });
 });
@@ -326,6 +415,16 @@ describe('validateNotification: kind: action', () => {
       validateNotification(baseAction({ context: { expenseId: 'exp_123' } }))
     ).not.toThrow();
   });
+
+  it('rejects a null meta (shared meta check applies to both kinds)', () => {
+    expect(() =>
+      validateNotification(baseAction({ meta: null as unknown as Record<string, unknown> }))
+    ).toThrow(NotificationValidationError);
+  });
+
+  it('accepts a valid meta object', () => {
+    expect(() => validateNotification(baseAction({ meta: { source: 'expenses' } }))).not.toThrow();
+  });
 });
 ```
 
@@ -336,6 +435,8 @@ Expected: FAIL — `kind: 'action'` cases fail because `validateNotification` do
 
 - [ ] **Step 3: Rewrite `notification.ts` to validate both kinds**
 
+**⚠️ Base state note (see the callout above Step 1):** the version below is built on top of the actual current `packages/core/src/notification.ts` — it preserves the top-level `null`/non-object guard, the exported `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH` constants, `MAX_ICON_LENGTH`, the corrected `isSafeLinkHref()` (resolve-and-compare-origin against `SAFE_LINK_BASE`), and the `icon`/`expiresAt`/`meta` checks NOT-37's fix round added — none of that is this plan's own work, and none of it should be lost. This step's only actual additions are: `MAX_ACTIONS`/`ACTION_STYLES`, the `kind === 'action'` branch, `validateActions()`, and moving `meta` validation to run for both kinds (`ActionNotification` has an optional `meta` field too, per its type in Task 1's `types.ts` changes above) while `severity`/`link`/`icon` stay `kind: 'info'`-only (the spec's `ActionNotification` type has none of those three fields).
+
 Replace the full contents of `packages/core/src/notification.ts`:
 
 ```ts
@@ -344,16 +445,26 @@ import type { Notification } from './types';
 /** Thrown by `validateNotification()` — exported so apps can `instanceof`-check it apart from other errors a `notify()` call might reject with. */
 export class NotificationValidationError extends Error {}
 
-const MAX_TITLE_LENGTH = 120;
-const MAX_BODY_LENGTH = 500;
-const MAX_LINK_LABEL_LENGTH = 80;
-const MAX_ACTIONS = 5;
+export const MAX_TITLE_LENGTH = 120;
+export const MAX_BODY_LENGTH = 500;
+export const MAX_LINK_LABEL_LENGTH = 80;
+export const MAX_ACTIONS = 5;
+const MAX_ICON_LENGTH = 200;
 const SEVERITIES = new Set(['info', 'success', 'warning', 'error']);
 const ACTION_STYLES = new Set(['primary', 'danger', 'default']);
 
+const SAFE_LINK_BASE = 'https://netifly.invalid';
+
 function isSafeLinkHref(href: string): boolean {
+  // A relative href must still resolve to the base origin — this is what
+  // rejects //host, /\host, and the tab/newline variants the URL parser
+  // strips before parsing.
   if (href.startsWith('/')) {
-    return true;
+    try {
+      return new URL(href, SAFE_LINK_BASE).origin === SAFE_LINK_BASE;
+    } catch {
+      return false;
+    }
   }
   try {
     const url = new URL(href);
@@ -379,32 +490,64 @@ function validateTitleAndBody(notification: Notification): void {
   }
 }
 
-function validateSeverity(notification: Notification): void {
+function validateMeta(notification: Notification): void {
+  const meta = (notification as { meta?: unknown }).meta;
+  if (meta === undefined) {
+    return;
+  }
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    throw new NotificationValidationError(
+      `Netifly: notify() meta must be a plain object, got ${JSON.stringify(meta)}`
+    );
+  }
+}
+
+function validateInfoOnlyFields(notification: Notification): void {
   const severity = (notification as { severity?: unknown }).severity;
   if (severity !== undefined && !SEVERITIES.has(severity as string)) {
     throw new NotificationValidationError(
       `Netifly: notify() severity must be one of 'info' | 'success' | 'warning' | 'error', got ${JSON.stringify(severity)}`
     );
   }
-}
 
-function validateLink(notification: Notification): void {
   const link = (notification as { link?: unknown }).link;
-  if (link === undefined) {
-    return;
-  }
-  const href = (link as { href?: unknown }).href;
-  const label = (link as { label?: unknown }).label;
+  if (link !== undefined) {
+    if (link === null || typeof link !== 'object') {
+      throw new NotificationValidationError(
+        `Netifly: notify() link must be an object, got ${JSON.stringify(link)}`
+      );
+    }
+    const href = (link as { href?: unknown }).href;
+    const label = (link as { label?: unknown }).label;
 
-  if (typeof href !== 'string' || !isSafeLinkHref(href)) {
-    throw new NotificationValidationError(
-      `Netifly: notify() link.href must be a relative path or an http(s) URL, got ${JSON.stringify(href)}`
-    );
+    if (typeof href !== 'string' || !isSafeLinkHref(href)) {
+      throw new NotificationValidationError(
+        `Netifly: notify() link.href must be a relative path or an http(s) URL, got ${JSON.stringify(href)}`
+      );
+    }
+    if (typeof label !== 'string' || label.trim().length === 0 || label.length > MAX_LINK_LABEL_LENGTH) {
+      throw new NotificationValidationError(
+        `Netifly: notify() link.label is required and must be at most ${MAX_LINK_LABEL_LENGTH} characters`
+      );
+    }
   }
-  if (typeof label !== 'string' || label.trim().length === 0 || label.length > MAX_LINK_LABEL_LENGTH) {
-    throw new NotificationValidationError(
-      `Netifly: notify() link.label is required and must be at most ${MAX_LINK_LABEL_LENGTH} characters`
-    );
+
+  const icon = (notification as { icon?: unknown }).icon;
+  if (icon !== undefined) {
+    if (typeof icon !== 'string' || icon.length > MAX_ICON_LENGTH) {
+      throw new NotificationValidationError(
+        `Netifly: notify() icon must be a string of at most ${MAX_ICON_LENGTH} characters`
+      );
+    }
+  }
+
+  const expiresAt = (notification as { expiresAt?: unknown }).expiresAt;
+  if (expiresAt !== undefined) {
+    if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
+      throw new NotificationValidationError(
+        `Netifly: notify() expiresAt must be a finite number, got ${JSON.stringify(expiresAt)}`
+      );
+    }
   }
 }
 
@@ -441,7 +584,7 @@ function validateActions(notification: Notification): void {
   }
 
   const expiresAt = (notification as { expiresAt?: unknown }).expiresAt;
-  if (typeof expiresAt !== 'number' || expiresAt <= Date.now()) {
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
     throw new NotificationValidationError(
       "Netifly: notify() kind:'action' requires expiresAt to be a timestamp in the future"
     );
@@ -456,6 +599,10 @@ function validateActions(notification: Notification): void {
  * `NotificationValidationError` on the first failure.
  */
 export function validateNotification(notification: Notification): void {
+  if (notification === null || typeof notification !== 'object') {
+    throw new NotificationValidationError('Netifly: notify() requires a notification object');
+  }
+
   const kind = (notification as { kind?: unknown }).kind;
   if (kind !== 'info' && kind !== 'action') {
     throw new NotificationValidationError(
@@ -464,10 +611,10 @@ export function validateNotification(notification: Notification): void {
   }
 
   validateTitleAndBody(notification);
+  validateMeta(notification);
 
   if (kind === 'info') {
-    validateSeverity(notification);
-    validateLink(notification);
+    validateInfoOnlyFields(notification);
     return;
   }
 
@@ -904,148 +1051,219 @@ git commit -m "feat(core): add signed action token construction and verification
 
 ---
 
-### Task 4: Redis answered-lock
+### Task 4: `claim()` — an atomic answered-lock primitive on `NetiflyTransport`
+
+**⚠️ This task's scope changed from the version reviewed during planning.** The plan was originally written against `packages/core/src/redisRouter.ts` (a `RedisRouter` class with a raw Redis client). Between planning and execution, `origin/main` picked up NOT-20's transport-abstraction refactor, which **deletes `redisRouter.ts` entirely** and replaces direct Redis access with a pluggable `NetiflyTransport` interface (`packages/core/src/types.ts`) with two implementations — `redisTransport()` (`transports/redisTransport.ts`) and `memoryTransport()` (`transports/memoryTransport.ts`) — plus `RefCountedTransport` (`transports/refCountedTransport.ts`), which `createNetifly()` always wraps the raw transport in, and a shared behavioral contract suite (`transports/transport.contract.ts`) both implementations run against. Neither implementation exposes a raw Redis client to callers. This task now adds a new `claim(key, ttlSeconds): Promise<boolean>` method to the transport contract itself — implemented in both `redisTransport()` (Redis `SET NX EX`) and `memoryTransport()` (an in-process TTL map) — so actionable notifications work under either transport, consistent with the abstraction's own premise. (Ruling recorded in this plan's ledger; see the spec's §6, also updated to reference `transport.claim()`.)
 
 **Files:**
-- Modify: `packages/core/src/redisRouter.ts`
-- Modify: `packages/core/src/redisRouter.test.ts`
+- Modify: `packages/core/src/types.ts` (add `claim` to the `NetiflyTransport` interface)
+- Modify: `packages/core/src/transports/transport.contract.ts` (shared behavioral tests both implementations must pass)
+- Modify: `packages/core/src/transports/redisTransport.ts`
+- Modify: `packages/core/src/transports/redisTransport.test.ts`
+- Modify: `packages/core/src/transports/memoryTransport.ts`
+- Modify: `packages/core/src/transports/memoryTransport.test.ts`
+- Modify: `packages/core/src/transports/refCountedTransport.ts`
+- Modify: `packages/core/src/transports/refCountedTransport.test.ts`
 
 **Interfaces:**
-- Consumes: nothing from other tasks (pure infrastructure addition to an existing class).
-- Produces: `answeredKey(notificationId, namespace?): string` and `RedisRouter.tryLockAnswered(notificationId, actionId, ttlSeconds): Promise<boolean>` — consumed by Task 6.
+- Consumes: nothing from other tasks (pure infrastructure addition to an existing interface and its implementations).
+- Produces: `NetiflyTransport.claim(key: string, ttlSeconds: number): Promise<boolean>` — consumed by Task 6 as `this.transport.claim(...)`, called with `key = `answered:${notificationId}`` (the `answered:` prefix is the caller's convention, not baked into the transport — `claim()` itself treats `key` as an opaque string, the same way `subscribe`/`publish` treat `userId` opaquely).
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing contract tests**
 
-In `packages/core/src/redisRouter.test.ts`, change the top import line from:
-
-```ts
-import { RedisRouter, RedisRouterOptions, channelName } from './redisRouter';
-```
-
-to:
+In `packages/core/src/transports/transport.contract.ts`, add two new `it()` blocks inside the existing `describe(`${name} transport contract`, () => { ... })` body, right after the existing `it('receivers([]) resolves {} without erroring', ...)` block and before `it('close() on a transport that was never subscribed to anything does not throw', ...)`:
 
 ```ts
-import { RedisRouter, RedisRouterOptions, answeredKey, channelName } from './redisRouter';
-```
-
-Then insert, immediately before the file's final `});` (the closing brace of the outer `describe('RedisRouter', ...)` block):
-
-```ts
-  describe('tryLockAnswered', () => {
-    it('the first caller wins and later callers for the same notificationId lose', async () => {
-      const router = createRouter(() => {});
-      const first = await router.tryLockAnswered('redisRouter-answered-1', 'approve', 60);
-      const second = await router.tryLockAnswered('redisRouter-answered-1', 'reject', 60);
+    it('claim(): the first caller wins and a later caller for the same key loses', async () => {
+      const transport = create();
+      const first = await transport.claim('contract-claim-1', 60);
+      const second = await transport.claim('contract-claim-1', 60);
       expect(first).toBe(true);
       expect(second).toBe(false);
     });
 
-    it('different notificationIds do not contend with each other', async () => {
-      const router = createRouter(() => {});
-      const a = await router.tryLockAnswered('redisRouter-answered-a', 'approve', 60);
-      const b = await router.tryLockAnswered('redisRouter-answered-b', 'approve', 60);
+    it('claim(): different keys do not contend with each other', async () => {
+      const transport = create();
+      const a = await transport.claim('contract-claim-a', 60);
+      const b = await transport.claim('contract-claim-b', 60);
       expect(a).toBe(true);
       expect(b).toBe(true);
     });
-
-    it('is namespace-aware, matching subscribe/publish', async () => {
-      const routerA = createRouter(() => {}, { namespace: 'redisRouter-tenant-a' });
-      const routerB = createRouter(() => {}, { namespace: 'redisRouter-tenant-b' });
-      const a = await routerA.tryLockAnswered('redisRouter-answered-shared', 'approve', 60);
-      const b = await routerB.tryLockAnswered('redisRouter-answered-shared', 'approve', 60);
-      expect(a).toBe(true);
-      expect(b).toBe(true);
-    });
-  });
-});
-
-describe('answeredKey', () => {
-  it('formats the per-notification answered-lock key', () => {
-    expect(answeredKey('notif-1')).toBe('netifly:answered:notif-1');
-  });
-
-  it('formats a namespaced answered-lock key', () => {
-    expect(answeredKey('notif-1', 'tenant-a')).toBe('netifly:tenant-a:answered:notif-1');
-  });
-});
 ```
-
-(Note: the first `});` above closes the pre-existing `describe('RedisRouter', ...)` block — the new `describe('answeredKey', ...)` is a new top-level block after it, mirroring how `describe('channelName', ...)` already sits above `describe('RedisRouter', ...)` in this file.)
 
 - [ ] **Step 2: Run the tests and verify they fail**
 
-Run: `cd packages/core && REDIS_URL=redis://127.0.0.1:6379 npx jest redisRouter.test.ts -t "tryLockAnswered|answeredKey"`
-Expected: FAIL — `router.tryLockAnswered is not a function` / `answeredKey is not exported`.
+Run: `cd packages/core && REDIS_URL=redis://127.0.0.1:6379 npx jest transports/redisTransport.test.ts transports/memoryTransport.test.ts -t "claim"`
+Expected: FAIL — `transport.claim is not a function`, for both the `redisTransport transport contract` and `memoryTransport transport contract` suites (each runs the shared contract file against its own implementation).
 
-- [ ] **Step 3: Implement `tryLockAnswered`/`answeredKey`**
+- [ ] **Step 3: Add `claim` to the `NetiflyTransport` interface**
 
-In `packages/core/src/redisRouter.ts`, add this constant right after the existing `const MAX_USER_ID_LENGTH = 256;`:
-
-```ts
-const ANSWERED_SEGMENT = 'answered:';
-```
-
-Add this function right after the existing `channelPrefix` function:
+In `packages/core/src/types.ts`, add a new method to the `NetiflyTransport` interface, right after the existing `receivers(userIds: UserId[]): Promise<Record<UserId, number>>;` line:
 
 ```ts
-function answeredKeyPrefix(namespace?: string): string {
-  return namespace ? `${CHANNEL_PREFIX}${namespace}:${ANSWERED_SEGMENT}` : `${CHANNEL_PREFIX}${ANSWERED_SEGMENT}`;
-}
-```
-
-Add this exported function right after the existing `export function channelName(...)`:
-
-```ts
-export function answeredKey(notificationId: string, namespace?: string): string {
-  if (typeof notificationId !== 'string' || notificationId.length === 0) {
-    throw new Error('Netifly: notificationId must be a non-empty string');
-  }
-  return `${answeredKeyPrefix(namespace)}${notificationId}`;
-}
-```
-
-Add this method to the `RedisRouter` class, right after the existing `publish()` method:
-
-```ts
-  private answeredKeyFor(notificationId: string): string {
-    return answeredKey(notificationId, this.namespace);
-  }
-
   /**
-   * Attempts to atomically claim "this notificationId's action has been
-   * answered" via Redis SET NX EX — the first caller across any instance to
-   * successfully SET wins; every later attempt (same or different instance)
-   * for the same notificationId gets `false` back until the key expires.
-   * Run on `this.publisher` (a plain client, safe for arbitrary commands),
-   * same reasoning as `numSubscribers()` above. `actionId` is stored as the
-   * value purely for operator visibility when inspecting Redis directly;
-   * nothing reads it back.
+   * Atomically claims `key` for `ttlSeconds`: the first caller to succeed
+   * gets `true`; every other caller (same or a different transport
+   * instance/process) gets `false` until the claim expires. `key` is an
+   * opaque caller-chosen string — this method assigns it no structure or
+   * namespace of its own, same as `userId` elsewhere on this interface.
+   * Introduced for actionable notifications' exactly-once "answered" lock
+   * (NOT-38 spec §6), but not itself specific to that use.
    */
-  async tryLockAnswered(notificationId: string, actionId: string, ttlSeconds: number): Promise<boolean> {
-    const result = await this.publisher.set(
-      this.answeredKeyFor(notificationId),
-      actionId,
-      'EX',
-      ttlSeconds,
-      'NX'
-    );
+  claim(key: string, ttlSeconds: number): Promise<boolean>;
+```
+
+- [ ] **Step 4: Implement `claim()` in `redisTransport()`**
+
+In `packages/core/src/transports/redisTransport.ts`, add this function right after the existing `channelPrefix` function:
+
+```ts
+function claimKeyPrefix(namespace?: string): string {
+  return namespace ? `${CHANNEL_PREFIX}${namespace}:` : CHANNEL_PREFIX;
+}
+```
+
+Add this method to the `RedisTransportImpl` class, right after the existing `receivers()` method:
+
+```ts
+  /**
+   * `SET key value EX ttlSeconds NX` — the first caller across any instance
+   * to successfully SET wins; every later attempt for the same key gets
+   * `false` back until the key expires. Run on `this.publisher` (a plain
+   * client, safe for arbitrary commands, same reasoning as `receivers()`
+   * above). The stored value itself is never read back — only the SET's
+   * own success/failure matters.
+   */
+  async claim(key: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.publisher.set(`${claimKeyPrefix(this.namespace)}${key}`, '1', 'EX', ttlSeconds, 'NX');
     return result === 'OK';
   }
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 5: Implement `claim()` in `memoryTransport()`**
 
-Run: `cd packages/core && REDIS_URL=redis://127.0.0.1:6379 npx jest redisRouter.test.ts`
-Expected: PASS — the new tests and every pre-existing test in the file.
+In `packages/core/src/transports/memoryTransport.ts`, add a claims map alongside the existing `subscribers` set, right after `const subscribers = new Set<UserId>();`:
 
-- [ ] **Step 5: Typecheck and commit**
+```ts
+  const claims = new Map<string, number>(); // key -> epoch ms the claim expires at
+```
+
+Add a `claim` method to the returned object, right after the existing `receivers` method:
+
+```ts
+    async claim(key, ttlSeconds) {
+      const now = Date.now();
+      const expiresAt = claims.get(key);
+      if (expiresAt !== undefined && expiresAt > now) {
+        return false;
+      }
+      claims.set(key, now + ttlSeconds * 1000);
+      return true;
+    },
+```
+
+Add `claims.clear();` to the existing `close()` method, alongside `subscribers.clear();`:
+
+```ts
+    async close() {
+      subscribers.clear();
+      claims.clear();
+      onMessageCb = undefined;
+      onErrorCb = undefined;
+    },
+```
+
+- [ ] **Step 6: Pass `claim()` through `RefCountedTransport`**
+
+In `packages/core/src/transports/refCountedTransport.ts`, add a pass-through method right after the existing `receivers()` method:
+
+```ts
+  claim(key: string, ttlSeconds: number): Promise<boolean> {
+    return this.raw.claim(key, ttlSeconds);
+  }
+```
+
+- [ ] **Step 7: Run the contract tests and verify they pass**
+
+Run: `cd packages/core && REDIS_URL=redis://127.0.0.1:6379 npx jest transports/`
+Expected: PASS — every contract test (including the two new `claim()` ones, for both `redisTransport` and `memoryTransport`) and every pre-existing test across `redisTransport.test.ts`, `memoryTransport.test.ts`, and `refCountedTransport.test.ts`.
+
+- [ ] **Step 8: Add implementation-specific tests**
+
+In `packages/core/src/transports/redisTransport.test.ts`, add a namespace-isolation test for `claim()`, right after the existing `it('receivers() is namespace-aware, matching subscribe/unsubscribe/publish (NOT-18 x NOT-14)', ...)` block:
+
+```ts
+  it('claim() is namespace-aware, matching subscribe/unsubscribe/publish/receivers', async () => {
+    const namespacedA = create({ namespace: 'redisTransport-claim-tenant-a' });
+    const defaultTransport = create();
+
+    const a = await namespacedA.claim('redisTransport-claim-shared', 60);
+    const b = await defaultTransport.claim('redisTransport-claim-shared', 60);
+
+    expect(a).toBe(true);
+    expect(b).toBe(true); // different namespace — does not contend with `a`'s claim
+  });
+```
+
+In `packages/core/src/transports/memoryTransport.test.ts`, add a TTL-expiry test, right after the existing `it('receivers() only ever reports 0 or 1 — this transport models exactly one process', ...)` block:
+
+```ts
+
+  it('claim() releases the key once ttlSeconds has elapsed', async () => {
+    const transport = memoryTransport();
+
+    const first = await transport.claim('memory-claim-ttl', 1);
+    expect(first).toBe(true);
+
+    const immediateRetry = await transport.claim('memory-claim-ttl', 1);
+    expect(immediateRetry).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const afterExpiry = await transport.claim('memory-claim-ttl', 1);
+    expect(afterExpiry).toBe(true);
+
+    await transport.close();
+  });
+```
+
+In `packages/core/src/transports/refCountedTransport.test.ts`, extend the `createFakeTransport()` helper — it must implement the full `NetiflyTransport` interface, which now includes `claim` — by adding this method to its returned object, right after the existing `async receivers() { return {}; },` line:
+
+```ts
+    async claim() {
+      return true;
+    },
+```
+
+Then add a pass-through test, right after the existing `it('passes publish/receivers/onMessage/onError/close straight through to the raw transport', ...)` block:
+
+```ts
+
+  it('passes claim() straight through to the raw transport', async () => {
+    const fake = createFakeTransport();
+    fake.claim = jest.fn().mockResolvedValue(false);
+    const wrapped = new RefCountedTransport(fake);
+
+    await expect(wrapped.claim('key-1', 60)).resolves.toBe(false);
+    expect(fake.claim).toHaveBeenCalledWith('key-1', 60);
+  });
+```
+
+(This requires widening `createFakeTransport()`'s return type — since the test file declares it as `NetiflyTransport & { subscribeCalls: UserId[]; unsubscribeCalls: UserId[] }`, and `fake.claim = jest.fn()...` reassigns a property already required by `NetiflyTransport`, no type change is needed beyond the interface update in Step 3, which every implementer of `NetiflyTransport` — including this test file's fake — must now satisfy.)
+
+- [ ] **Step 9: Run the full transports test suite and verify everything passes**
+
+Run: `cd packages/core && REDIS_URL=redis://127.0.0.1:6379 npx jest transports/`
+Expected: PASS — every test in the `transports/` directory.
+
+- [ ] **Step 10: Typecheck and commit**
 
 Run: `cd packages/core && npx tsc -p tsconfig.json --noEmit`
 Expected: no errors.
 
 ```bash
-git add packages/core/src/redisRouter.ts packages/core/src/redisRouter.test.ts
-git commit -m "feat(core): add RedisRouter.tryLockAnswered() for actionable notifications (NOT-38)"
+git add packages/core/src/types.ts packages/core/src/transports/transport.contract.ts packages/core/src/transports/redisTransport.ts packages/core/src/transports/redisTransport.test.ts packages/core/src/transports/memoryTransport.ts packages/core/src/transports/memoryTransport.test.ts packages/core/src/transports/refCountedTransport.ts packages/core/src/transports/refCountedTransport.test.ts
+git commit -m "feat(core): add NetiflyTransport.claim() — atomic answered-lock primitive for actionable notifications (NOT-38)"
 ```
 
 ---
@@ -1195,7 +1413,7 @@ git commit -m "feat(core): parse the inbound 'action' frame (NOT-38)"
 - Modify: `packages/express/src/index.test.ts` (three call sites — see Step 1)
 
 **Interfaces:**
-- Consumes: `validateNotification` (Task 1), `resolveActionSecret` (Task 2), `verifyActionToken`/`buildActionWireNotification` (Task 3), `RedisRouter.tryLockAnswered` (Task 4), the widened `InboundFrame` (Task 5).
+- Consumes: `validateNotification` (Task 1), `resolveActionSecret` (Task 2), `verifyActionToken`/`buildActionWireNotification` (Task 3), `NetiflyTransport.claim()` (Task 4), the widened `InboundFrame` (Task 5).
 - Produces: `NetiflyInstance.notify()` handling `kind: 'action'`, `NetiflyInstance.on('action', ...)`, the `netifly.notification.resolved` and `netifly.actionAck` wire frames — the last of these consumed by Task 8 (client).
 
 - [ ] **Step 1: Keep the existing test suites green under eager `actionSecret` validation**
@@ -1624,7 +1842,10 @@ Then insert, immediately before the file's final `});` (after the `notify()` des
       await onceEvent(instanceB.netifly, 'connect');
 
       const notificationOnA = nextMatchingMessage(wsA, (e) => e.type === 'notification');
-      const actionOnB = onceInfo<{ notificationId: string; actionId: string }>(instanceB.netifly, 'action');
+      const actionOnB = onceInfo<{ userId: string; notificationId: string; actionId: string }>(
+        instanceB.netifly,
+        'action'
+      );
       const resolvedOnA = nextMatchingMessage(wsA, (e) => e.type === 'netifly.notification.resolved');
       const resolvedOnB = nextMatchingMessage(wsB, (e) => e.type === 'netifly.notification.resolved');
 
@@ -1642,7 +1863,7 @@ Then insert, immediately before the file's final `});` (after the `notify()` des
       wsB.send(JSON.stringify({ type: 'action', id: envelope.id, action: 'approve', token }));
 
       expect((await ackOnB).data).toEqual({ id: envelope.id, action: 'approve', status: 'accepted' });
-      expect(await actionOnB).toEqual({ notificationId: envelope.id, actionId: 'approve' });
+      expect(await actionOnB).toEqual({ userId, notificationId: envelope.id, actionId: 'approve' });
       expect((await resolvedOnA).data).toEqual({ id: envelope.id, action: 'approve' });
       expect((await resolvedOnB).data).toEqual({ id: envelope.id, action: 'approve' });
     });
@@ -1711,11 +1932,15 @@ Add a field, and resolve it in the constructor. Add right after `private readonl
   private readonly actionSecret: string | undefined;
 ```
 
-In the constructor, right after `this.validate = options.validate;`, add:
+**⚠️ Placement matters here — do not place this right after `this.validate = options.validate;`.** That line runs *before* the existing `transport`/`namespace` mutual-exclusivity check and the `redisUrl`-missing check further down the constructor. `resolveActionSecret()` can itself throw (when neither an `actionSecret` option nor `NETIFLY_SECRET` is set), and if it runs first, its error masks those pre-existing, more specific validation errors for any caller who triggers one of them without also happening to configure `actionSecret` — including an existing test (`"throws synchronously when both transport and namespace are passed"`) that predates this option entirely.
+
+Instead, add the resolution call **after transport setup completes**, right after the existing `this.transport.onError((error) => this.emitError(error));` line and before `this.wss = new WebSocketServer({ noServer: true, maxPayload: this.maxPayload });`:
 
 ```ts
     this.actionSecret = resolveActionSecret(options.actionSecret);
 ```
+
+This way every pre-existing constructor validation (the `transport`+`namespace` conflict, the missing-`redisUrl` check) still fires first, exactly as before this option existed — `actionSecret` resolution is additive at the *end* of construction-time validation, not inserted ahead of it.
 
 Change `buildEnvelope` to accept an optional preset id (needed so a `kind:'action'` notification's envelope id matches the `nid` embedded in its tokens):
 
@@ -1801,7 +2026,7 @@ to:
     ws.on('message', (data) => this.handleInboundFrame(userId, ws, data, inboundBucket));
 ```
 
-Finally, replace the whole `handleInboundFrame` method:
+Finally, replace the whole `handleInboundFrame` method. **Note (updated after Task 5 landed):** Task 5 already added a `frame.type === 'action'` no-op stopgap (`if (frame.type === 'action') { return; }`, right after `const frame = parsed.frame;`, with an explanatory comment) purely to keep the file compiling once `InboundFrame` widened to include `'action'` — it does nothing else, no emit, no relay. The "before" snippet below matches the real current file, stopgap included; this step replaces that stopgap's bare `return;` with the real `handleActionFrame` call:
 
 ```ts
   private handleInboundFrame(userId: UserId, data: RawData, bucket: TokenBucket): void {
@@ -1816,8 +2041,16 @@ Finally, replace the whole `handleInboundFrame` method:
       return;
     }
 
-    const ts = Date.now();
     const frame = parsed.frame;
+
+    // Action frames are handled by a later task, which replaces this whole method with real
+    // signature verification and idempotency handling. This stub exists only
+    // so the type-widened InboundFrame union still compiles here.
+    if (frame.type === 'action') {
+      return;
+    }
+
+    const ts = Date.now();
     let relayType: string;
     let relayData: unknown;
 
@@ -1836,7 +2069,8 @@ Finally, replace the whole `handleInboundFrame` method:
     }
 
     const relayEnvelope = this.buildEnvelope(relayType, relayData);
-    this.router.publish(userId, relayEnvelope).catch((error: unknown) => this.emitError(error));
+    const relayMessage = this.serializeEnvelope(userId, relayEnvelope);
+    this.transport.publish(userId, relayMessage).catch((error: unknown) => this.emitError(error));
   }
 ```
 
@@ -1881,7 +2115,8 @@ with:
     }
 
     const relayEnvelope = this.buildEnvelope(relayType, relayData);
-    this.router.publish(userId, relayEnvelope).catch((error: unknown) => this.emitError(error));
+    const relayMessage = this.serializeEnvelope(userId, relayEnvelope);
+    this.transport.publish(userId, relayMessage).catch((error: unknown) => this.emitError(error));
   }
 
   // Verifies a client's answer to an actionable notification (NOT-38 spec
@@ -1914,15 +2149,20 @@ with:
       return;
     }
 
+    // NOT-20 replaced the earlier direct-Redis RedisRouter.tryLockAnswered()
+    // with this.transport.claim() — an atomic claim primitive on the
+    // NetiflyTransport interface itself (Task 4), so this works under any
+    // transport, not just Redis. `answered:` is this call site's own key
+    // convention — claim() treats `key` as an opaque string.
     const ttlSeconds = Math.max(1, Math.ceil((payload.exp - Date.now()) / 1000));
-    let locked: boolean;
+    let claimed: boolean;
     try {
-      locked = await this.router.tryLockAnswered(payload.nid, payload.aid, ttlSeconds);
+      claimed = await this.transport.claim(`answered:${payload.nid}`, ttlSeconds);
     } catch (error) {
       this.emitError(error);
       return;
     }
-    if (!locked) {
+    if (!claimed) {
       this.sendActionAck(ws, frame.id, frame.action, 'already_answered');
       return;
     }
@@ -1939,7 +2179,8 @@ with:
       id: payload.nid,
       action: payload.aid,
     });
-    this.router.publish(userId, resolvedEnvelope).catch((error: unknown) => this.emitError(error));
+    const resolvedMessage = this.serializeEnvelope(userId, resolvedEnvelope);
+    this.transport.publish(userId, resolvedMessage).catch((error: unknown) => this.emitError(error));
 
     this.sendActionAck(ws, frame.id, frame.action, 'accepted');
   }
@@ -2113,7 +2354,9 @@ Add a field and resolve it in the constructor. Right after `private readonly val
   private readonly actionSecret: string | undefined;
 ```
 
-In the constructor, right after `this.validate = options.validate;`, add:
+**⚠️ Same placement caveat as Task 6's server-side change.** `this.validate = options.validate;` runs *before* the existing missing-`redisUrl` check further down this constructor — an existing test (`"throws at construction time when neither redisUrl nor REDIS_URL is set"`, called with no `actionSecret` either) would otherwise get the new `actionSecret` error instead of the expected `redisUrl` one.
+
+Instead, add the resolution call at the **end** of the constructor, right after the existing `this.redis = new Redis(redisUrl, { lazyConnect: true });` line (the constructor's last statement):
 
 ```ts
     this.actionSecret = resolveActionSecret(options.actionSecret);
@@ -2529,26 +2772,59 @@ git commit -m "feat(client): add respondToAction()/onActionAck()/onResolved() (N
 
 ### Task 9: Package exports, JSON Schema, and type tests
 
+**⚠️ This task's scope changed since it was written.** NOT-37's final-review fix wave (already merged, commits `3a4e15f`/etc.) got to `notificationSchema.ts` first: it's no longer the plain single-shape schema this task's original text assumed. The real current file imports `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH` from `notification.ts` instead of hardcoding them, has no top-level `additionalProperties: false` (a prior review found that rejected payloads the runtime validator actually accepts), and has a `pattern` on `link.href` (a prior review found `javascript:`/`data:` hrefs slipped through an unconstrained schema field). This task's widening must build on top of that, not revert it — and a `notificationSchema.test.ts` file that didn't exist when this task was originally written now does, asserting schema/runtime agreement against the *current flat shape* (`notificationJsonSchema.required`, `.properties.title`, etc.) — the `oneOf` restructuring below breaks that file's field access entirely unless it's updated too, so this task now also touches `notification.ts` (to export one more constant) and `notificationSchema.test.ts`.
+
 **Files:**
+- Modify: `packages/core/src/notification.ts` (export one more constant)
 - Modify: `packages/core/src/notificationSchema.ts`
+- Modify: `packages/core/src/notificationSchema.test.ts`
 - Modify: `packages/core/src/index.ts`
 - Modify: `packages/core/test-d/netifly.test-d.ts`
 
 **Interfaces:**
-- Consumes: everything from Tasks 1–7.
-- Produces: `notificationJsonSchema` widened to cover both kinds, and every new type/function re-exported from `@netiflyjs/core`.
+- Consumes: everything from Tasks 1–7, plus NOT-37's fix-round `notificationSchema.ts`/`notificationSchema.test.ts`.
+- Produces: `notificationJsonSchema` widened to cover both kinds (still built from the same shared constants, now including `MAX_ICON_LENGTH` and `MAX_ACTIONS` too), and every new type/function re-exported from `@netiflyjs/core`.
 
-- [ ] **Step 1: Widen the JSON Schema**
+- [ ] **Step 1: Export one more constant from `notification.ts`**
 
-Replace the full contents of `packages/core/src/notificationSchema.ts` (widens NOT-37's single-object schema into a `oneOf` covering both kinds):
+`MAX_ICON_LENGTH` currently exists in `packages/core/src/notification.ts` but isn't exported (unlike `MAX_TITLE_LENGTH`/`MAX_BODY_LENGTH`/`MAX_LINK_LABEL_LENGTH`, which already are). Change:
 
 ```ts
+const MAX_ICON_LENGTH = 200;
+```
+
+to:
+
+```ts
+export const MAX_ICON_LENGTH = 200;
+```
+
+(This also closes a Minor a prior review parked: the schema's `icon` field had no `maxLength` matching this constant — Step 2 below adds it now that the constant is importable.)
+
+- [ ] **Step 2: Widen the JSON Schema, building on the current file, not reverting it**
+
+Replace the full contents of `packages/core/src/notificationSchema.ts` (widens the current single-object schema into a `oneOf` covering both kinds, preserving every existing fix-round improvement — the shared constants import, the dropped top-level `additionalProperties: false`, and the `link.href` pattern):
+
+```ts
+import {
+  MAX_ACTIONS,
+  MAX_BODY_LENGTH,
+  MAX_ICON_LENGTH,
+  MAX_LINK_LABEL_LENGTH,
+  MAX_TITLE_LENGTH,
+} from './notification';
+
 /**
  * A hand-written JSON Schema (draft-07) mirroring `Notification` in
  * types.ts and the runtime checks in notification.ts — kept in sync by
  * hand, since the shape is small and stable. Exported as a plain object
  * (rather than a .json file) so it ships through the normal `tsc` build
  * into `dist/`, matching how every other export in this package is built.
+ *
+ * `additionalProperties` is deliberately omitted at the top level of both
+ * variants: the runtime validator in notification.ts ignores unknown
+ * properties, so a schema that rejected them would be stricter than what
+ * the server actually accepts.
  */
 export const notificationJsonSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
@@ -2557,22 +2833,32 @@ export const notificationJsonSchema = {
     {
       title: 'InfoNotification',
       type: 'object',
-      additionalProperties: false,
       properties: {
         kind: { const: 'info' },
-        title: { type: 'string', minLength: 1, maxLength: 120 },
-        body: { type: 'string', minLength: 1, maxLength: 500 },
+        // minLength: 1 accepts whitespace-only strings (e.g. "   "), which
+        // the runtime validator additionally rejects via a `.trim()` check.
+        // JSON Schema draft-07 can't easily express "non-whitespace", so
+        // this schema is intentionally looser than the runtime here.
+        title: { type: 'string', minLength: 1, maxLength: MAX_TITLE_LENGTH },
+        body: { type: 'string', minLength: 1, maxLength: MAX_BODY_LENGTH },
         severity: { type: 'string', enum: ['info', 'success', 'warning', 'error'] },
         link: {
           type: 'object',
           additionalProperties: false,
           properties: {
-            href: { type: 'string', minLength: 1 },
-            label: { type: 'string', minLength: 1, maxLength: 80 },
+            // Restricts href to a relative path (single leading `/`, not
+            // `//`) or an http(s) URL — blocks the obvious unsafe schemes
+            // and bare `//host` protocol-relative URLs. Can't express the
+            // full origin-resolution check `isSafeLinkHref()` performs at
+            // runtime (e.g. `/\host` variants), so the runtime validator
+            // remains the authoritative check — this is a best-effort
+            // schema-level backstop.
+            href: { type: 'string', minLength: 1, pattern: '^(\\/(?!\\/)|https?:\\/\\/)' },
+            label: { type: 'string', minLength: 1, maxLength: MAX_LINK_LABEL_LENGTH },
           },
           required: ['href', 'label'],
         },
-        icon: { type: 'string' },
+        icon: { type: 'string', maxLength: MAX_ICON_LENGTH },
         expiresAt: { type: 'number' },
         meta: { type: 'object' },
       },
@@ -2581,15 +2867,14 @@ export const notificationJsonSchema = {
     {
       title: 'ActionNotification',
       type: 'object',
-      additionalProperties: false,
       properties: {
         kind: { const: 'action' },
-        title: { type: 'string', minLength: 1, maxLength: 120 },
-        body: { type: 'string', minLength: 1, maxLength: 500 },
+        title: { type: 'string', minLength: 1, maxLength: MAX_TITLE_LENGTH },
+        body: { type: 'string', minLength: 1, maxLength: MAX_BODY_LENGTH },
         actions: {
           type: 'array',
           minItems: 1,
-          maxItems: 5,
+          maxItems: MAX_ACTIONS,
           items: {
             type: 'object',
             additionalProperties: false,
@@ -2620,7 +2905,65 @@ export const notificationJsonSchema = {
 } as const;
 ```
 
-- [ ] **Step 2: Export the new types and functions from `index.ts`**
+- [ ] **Step 3: Fix `notificationSchema.test.ts` for the new `oneOf` shape**
+
+This file (added by NOT-37's fix round) currently accesses `notificationJsonSchema.required` and `notificationJsonSchema.properties.title`/`.body`/`.severity` directly — those paths no longer exist once the schema is a `oneOf` array. All four of its existing fixtures use `kind: 'info'` exclusively, so the fix is to point the helper at the info variant specifically. In `packages/core/src/notificationSchema.test.ts`, change:
+
+```ts
+function checkAgainstSchema(notification: Record<string, unknown>): boolean {
+  for (const field of notificationJsonSchema.required) {
+    if (!(field in notification)) {
+      return false;
+    }
+  }
+
+  const title = notification.title;
+  const titleSchema = notificationJsonSchema.properties.title;
+```
+
+to:
+
+```ts
+const infoSchema = notificationJsonSchema.oneOf[0];
+
+function checkAgainstSchema(notification: Record<string, unknown>): boolean {
+  for (const field of infoSchema.required) {
+    if (!(field in notification)) {
+      return false;
+    }
+  }
+
+  const title = notification.title;
+  const titleSchema = infoSchema.properties.title;
+```
+
+and further down in the same function, change the two remaining `notificationJsonSchema.properties....` references:
+
+```ts
+  const bodySchema = notificationJsonSchema.properties.body;
+```
+
+to:
+
+```ts
+  const bodySchema = infoSchema.properties.body;
+```
+
+and:
+
+```ts
+    const allowed: readonly string[] = notificationJsonSchema.properties.severity.enum;
+```
+
+to:
+
+```ts
+    const allowed: readonly string[] = infoSchema.properties.severity.enum;
+```
+
+No other part of this file changes — the fixtures, `runtimeAccepts()`, and the `it.each` block are all kind-agnostic-in-content-but-info-in-practice already and need no edits.
+
+- [ ] **Step 4: Export the new types and functions from `index.ts`**
 
 In `packages/core/src/index.ts`, add right after the existing `export { NotificationValidationError, validateNotification } from './notification';` line:
 
@@ -2643,7 +2986,7 @@ Add these two type names from `./actionToken`, as a new export line right after 
 export type { ActionTokenPayload, VerifyActionTokenResult } from './actionToken';
 ```
 
-- [ ] **Step 3: Add tsd type tests**
+- [ ] **Step 5: Add tsd type tests**
 
 Change the existing top-of-file import block in `packages/core/test-d/netifly.test-d.ts` from:
 
@@ -2705,7 +3048,7 @@ createNetifly<Events>({
 });
 ```
 
-- [ ] **Step 4: Run typecheck, tsd, and the full test suite**
+- [ ] **Step 6: Run typecheck, tsd, and the full test suite**
 
 Run: `cd packages/core && npx tsc -p tsconfig.json --noEmit && npx tsd`
 Expected: no errors from either.
@@ -2716,10 +3059,10 @@ Expected: PASS — full suite.
 Run: `cd packages/client && REDIS_URL=redis://127.0.0.1:6379 npx jest` and `cd packages/express && REDIS_URL=redis://127.0.0.1:6379 npx jest`
 Expected: PASS — full suites.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/core/src/notificationSchema.ts packages/core/src/index.ts packages/core/test-d/netifly.test-d.ts
+git add packages/core/src/notification.ts packages/core/src/notificationSchema.ts packages/core/src/notificationSchema.test.ts packages/core/src/index.ts packages/core/test-d/netifly.test-d.ts
 git commit -m "feat(core): export actionable notification types, widen JSON schema, add type tests (NOT-38)"
 ```
 

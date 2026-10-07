@@ -9,10 +9,15 @@ import { redisTransport } from './transports/redisTransport';
 import { RefCountedTransport } from './transports/refCountedTransport';
 import { startHeartbeat } from './heartbeat';
 import { parseInboundFrame } from './inboundFrame';
+import type { InboundFrame } from './inboundFrame';
 import { TokenBucket } from './rateLimiter';
+import { resolveActionSecret } from './actionSecret';
+import { buildActionWireNotification, verifyActionToken } from './actionToken';
+import { validateNotification } from './notification';
 import { ENVELOPE_VERSION } from './types';
 import type {
   AckInfo,
+  ActionInfo,
   AllowedOrigins,
   CloseOptions,
   CreateNetiflyOptions,
@@ -21,6 +26,7 @@ import type {
   MalformedFrameInfo,
   NetiflyInstance,
   NetiflyTransport,
+  Notification,
   RejectInfo,
   ResponseInfo,
   SendOrOptions,
@@ -44,7 +50,7 @@ const DEFAULT_DRAIN_MS = 5000;
 // one that persists to a database and occasionally rejects — can't take the
 // server down. Pre-existing events ('connect'/'disconnect'/'error'/
 // 'reject'/'dropped') keep their existing unwrapped behavior.
-const SAFE_EVENTS = new Set(['sent', 'delivered', 'read', 'response', 'malformedFrame']);
+const SAFE_EVENTS = new Set(['sent', 'delivered', 'read', 'response', 'malformedFrame', 'action']);
 
 class NetiflyServerImpl<Events extends EventMap = EventMap>
   extends EventEmitter
@@ -61,6 +67,7 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
   private readonly maxConnectionsPerUser: number;
   private readonly maxInboundFramesPerSecond: number;
   private readonly validate: CreateNetiflyOptions<Events>['validate'];
+  private readonly actionSecret: string | undefined;
   private readonly heartbeatTimer: NodeJS.Timeout;
   private readonly ulid = monotonicFactory();
   private closed = false;
@@ -101,6 +108,8 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     this.transport = new RefCountedTransport(raw);
     this.transport.onMessage((userId, message) => this.deliverLocally(userId, message));
     this.transport.onError((error) => this.emitError(error));
+
+    this.actionSecret = resolveActionSecret(options.actionSecret);
 
     this.wss = new WebSocketServer({ noServer: true, maxPayload: this.maxPayload });
     this.heartbeatTimer = startHeartbeat({
@@ -246,10 +255,10 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     this.registry.add(userId, ws);
     this.emit('connect', userId);
     const inboundBucket = new TokenBucket(this.maxInboundFramesPerSecond);
-    ws.on('message', (data) => this.handleInboundFrame(userId, data, inboundBucket));
+    ws.on('message', (data) => this.handleInboundFrame(userId, ws, data, inboundBucket));
   }
 
-  private handleInboundFrame(userId: UserId, data: RawData, bucket: TokenBucket): void {
+  private handleInboundFrame(userId: UserId, ws: WebSocket, data: RawData, bucket: TokenBucket): void {
     if (!bucket.tryRemoveToken()) {
       this.emitMalformedFrame({ userId, reason: 'rateLimited' });
       return;
@@ -261,8 +270,14 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
       return;
     }
 
-    const ts = Date.now();
     const frame = parsed.frame;
+
+    if (frame.type === 'action') {
+      this.handleActionFrame(userId, ws, frame).catch((error: unknown) => this.emitError(error));
+      return;
+    }
+
+    const ts = Date.now();
     let relayType: string;
     let relayData: unknown;
 
@@ -283,6 +298,86 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     const relayEnvelope = this.buildEnvelope(relayType, relayData);
     const relayMessage = this.serializeEnvelope(userId, relayEnvelope);
     this.transport.publish(userId, relayMessage).catch((error: unknown) => this.emitError(error));
+  }
+
+  // Verifies a client's answer to an actionable notification (NOT-38 spec
+  // §6) and always resolves to exactly one of the four ack statuses on the
+  // answering socket — never throws, never leaves the frame unanswered.
+  private async handleActionFrame(
+    userId: UserId,
+    ws: WebSocket,
+    frame: Extract<InboundFrame, { type: 'action' }>
+  ): Promise<void> {
+    if (this.actionSecret === undefined) {
+      this.sendActionAck(ws, frame.id, frame.action, 'invalid');
+      return;
+    }
+
+    const verified = verifyActionToken(frame.token, this.actionSecret);
+    if (!verified.ok) {
+      this.sendActionAck(ws, frame.id, frame.action, 'invalid');
+      return;
+    }
+
+    const { payload } = verified;
+    if (payload.nid !== frame.id || payload.aid !== frame.action || payload.uid !== userId) {
+      this.sendActionAck(ws, frame.id, frame.action, 'invalid');
+      return;
+    }
+
+    if (Date.now() > payload.exp) {
+      this.sendActionAck(ws, frame.id, frame.action, 'expired');
+      return;
+    }
+
+    // NOT-20 replaced the earlier direct-Redis RedisRouter.tryLockAnswered()
+    // with this.transport.claim() — an atomic claim primitive on the
+    // NetiflyTransport interface itself (Task 4), so this works under any
+    // transport, not just Redis. `answered:` is this call site's own key
+    // convention — claim() treats `key` as an opaque string.
+    const ttlSeconds = Math.max(1, Math.ceil((payload.exp - Date.now()) / 1000));
+    let claimed: boolean;
+    try {
+      claimed = await this.transport.claim(`answered:${payload.nid}`, ttlSeconds);
+    } catch (error) {
+      this.emitError(error);
+      this.sendActionAck(ws, frame.id, frame.action, 'invalid');
+      return;
+    }
+    if (!claimed) {
+      this.sendActionAck(ws, frame.id, frame.action, 'already_answered');
+      return;
+    }
+
+    this.emit('action', {
+      userId,
+      notificationId: payload.nid,
+      actionId: payload.aid,
+      input: frame.input,
+      context: payload.ctx ?? undefined,
+    } satisfies ActionInfo);
+
+    const resolvedEnvelope = this.buildEnvelope('netifly.notification.resolved', {
+      id: payload.nid,
+      action: payload.aid,
+    });
+    const resolvedMessage = this.serializeEnvelope(userId, resolvedEnvelope);
+    this.transport.publish(userId, resolvedMessage).catch((error: unknown) => this.emitError(error));
+
+    this.sendActionAck(ws, frame.id, frame.action, 'accepted');
+  }
+
+  private sendActionAck(
+    ws: WebSocket,
+    id: string,
+    action: string,
+    status: 'accepted' | 'already_answered' | 'expired' | 'invalid'
+  ): void {
+    if (ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const envelope = this.buildEnvelope('netifly.actionAck', { id, action, status });
+    ws.send(JSON.stringify(envelope));
   }
 
   private emitMalformedFrame(info: MalformedFrameInfo): void {
@@ -391,6 +486,40 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     return result;
   }
 
+  async notify(userId: UserId, notification: Notification): Promise<SendResult> {
+    if (this.closed) {
+      throw new Error('Netifly: cannot send after close()');
+    }
+    validateNotification(notification);
+
+    if (notification.kind === 'action') {
+      if (this.actionSecret === undefined) {
+        throw new Error("Netifly: kind:'action' notifications are disabled (actionSecret: false).");
+      }
+      const id = this.ulid();
+      const wireData = buildActionWireNotification(notification, {
+        notificationId: id,
+        userId,
+        secret: this.actionSecret,
+      });
+      return this.publishEnvelope(userId, 'notification', wireData, id);
+    }
+
+    return this.publishEnvelope(userId, 'notification', notification);
+  }
+
+  async notifyOr(
+    userId: UserId,
+    notification: Notification,
+    options: SendOrOptions
+  ): Promise<SendResult> {
+    const result = await this.notify(userId, notification);
+    if (!result.delivered) {
+      await options.offline();
+    }
+    return result;
+  }
+
   private async sendInternal<T>(userId: UserId, rest: [T] | [string, T]): Promise<SendResult> {
     if (this.closed) {
       throw new Error('Netifly: cannot send after close()');
@@ -406,7 +535,17 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     // caller invoked `send()` itself). At runtime this is exactly the actual
     // `(type, data)` pair being sent.
     (this.validate as ((type: string, data: unknown) => void) | undefined)?.(type, data);
-    const envelope = this.buildEnvelope(type, data);
+    return this.publishEnvelope(userId, type, data);
+  }
+
+  // Shared by sendInternal() and notify(): builds the envelope, fires
+  // 'sent', serializes it, and publishes via the transport. Deliberately
+  // does NOT run `this.validate` — notify() calls this directly, after its
+  // own validateNotification(), and must never run the app's Events-typed
+  // validate hook for a 'notification' type that was never a member of
+  // that map (see NOT-37 spec §4).
+  private async publishEnvelope<T>(userId: UserId, type: string, data: T, id?: string): Promise<SendResult> {
+    const envelope = this.buildEnvelope(type, data, id);
     this.emit('sent', {
       userId,
       id: envelope.id,
@@ -418,8 +557,8 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
     return { delivered: receivers > 0, instances: receivers };
   }
 
-  private buildEnvelope<T>(type: string, data: T): Envelope<T> {
-    return { v: ENVELOPE_VERSION, id: this.ulid(), type, data, ts: Date.now() };
+  private buildEnvelope<T>(type: string, data: T, id: string = this.ulid()): Envelope<T> {
+    return { v: ENVELOPE_VERSION, id, type, data, ts: Date.now() };
   }
 
   private serializeEnvelope(userId: UserId, envelope: Envelope<unknown>): string {
@@ -498,8 +637,19 @@ class NetiflyServerImpl<Events extends EventMap = EventMap>
               })
           )
       );
-      const timeout = new Promise<void>((resolve) => setTimeout(resolve, drainMs));
-      await Promise.race([drained, timeout]);
+      let timer: NodeJS.Timeout;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, drainMs);
+      });
+      try {
+        await Promise.race([drained, timeout]);
+      } finally {
+        // Whichever side of the race won, the timer must be cancelled here —
+        // otherwise, when every client closes gracefully well before
+        // drainMs, this setTimeout keeps running (and keeps the event loop,
+        // and Jest, alive) until it eventually fires on its own.
+        clearTimeout(timer!);
+      }
 
       for (const ws of this.wss.clients) {
         ws.terminate();

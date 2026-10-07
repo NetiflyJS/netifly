@@ -22,6 +22,9 @@ function createFakeTransport(): NetiflyTransport & {
     async receivers() {
       return {};
     },
+    async claim() {
+      return true;
+    },
     onMessage() {},
     onError() {},
     async close() {},
@@ -110,6 +113,15 @@ describe('RefCountedTransport', () => {
     expect(fake.onMessage).toHaveBeenCalledWith(onMessageCb);
     expect(fake.onError).toHaveBeenCalledWith(onErrorCb);
     expect(fake.close).toHaveBeenCalled();
+  });
+
+  it('passes claim() straight through to the raw transport', async () => {
+    const fake = createFakeTransport();
+    fake.claim = jest.fn().mockResolvedValue(false);
+    const wrapped = new RefCountedTransport(fake);
+
+    await expect(wrapped.claim('key-1', 60)).resolves.toBe(false);
+    expect(fake.claim).toHaveBeenCalledWith('key-1', 60);
   });
 
   it('close() clears its ref-count map — a subsequent subscribe() after close() subscribes the raw transport again', async () => {

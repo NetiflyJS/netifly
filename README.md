@@ -156,6 +156,89 @@ const netifly = createNetifly<Events>({
 
 `validate` is called with the exact `(type, data)` pair for every `send()`/`sendOr()` call, before the envelope is built or published. Throwing from `validate` aborts the send — nothing is published, and the error propagates straight out of the `send()`/`sendOr()` call (it's not caught or wrapped). Omit `validate` entirely and behavior is unchanged from before this option existed.
 
+### Events vs. notifications: when to use `send()` vs `notify()`
+
+`send()`/`sendOr()` move whatever `type`/`data` your app defines — Netifly has no opinion on the shape. `notify()`/`notifyOr()` are a thin, opinionated layer on top of the exact same delivery path (same envelope, same `SendResult`, same `sendOr`-style offline fallback), for the specific, common case of a user-facing notification:
+
+```ts
+await netifly.notify(userId, {
+  kind: 'info',
+  title: 'Export ready',
+  body: 'Your March report has finished generating.',
+  severity: 'success',
+  link: { href: '/reports/123', label: 'Open' },
+  expiresAt: Date.now() + 24 * 3600_000,
+});
+```
+
+Use `send()` for app-internal events a client-side handler reacts to programmatically (`'comment.created'`, `'export.ready'`, ...). Use `notify()` when the payload *is* the thing a human reads — Netifly validates it server-side (`title`/`body` length limits, a safe `link.href` — rejecting `javascript:`/`data:`/other unsafe schemes) and gives every notification a consistent shape your UI can render generically, without your app hand-rolling that schema itself. A `notify()` call that fails validation throws `NotificationValidationError` (exported from `@netiflyjs/core`) synchronously, before anything is published.
+
+On the wire, `notify()` publishes with envelope `type: "notification"` — an ordinary, unprefixed type, so it flows through the client's normal auto-ack and `lastEventId` tracking exactly like any `send()`-originated message (see [Message Envelope](#-message-envelope)).
+
+Because `type: "notification"` is just an ordinary envelope type, a typed `NetiflyClient<Events>` subscribes to it the same way it subscribes to any app event: add a `notification` entry to your app's own `Events` map, then call `client.on('notification', ...)`. There's nothing special about the name `'notification'` here — it just has to match the `type` your server publishes with.
+
+```ts
+import { createNetiflyClient } from '@netiflyjs/client';
+import type { Notification } from '@netiflyjs/core';
+// `@netiflyjs/client` has zero runtime dependencies and doesn't import from
+// `@netiflyjs/core` itself, but a type-only import like this is fine even in
+// a browser bundle — it's erased entirely at compile time.
+
+type Events = {
+  'export.ready': { url: string };
+  notification: Notification;
+};
+
+const client = createNetiflyClient<Events>({ url: 'wss://api.example.com/netifly' });
+client.on('notification', (notification) => {
+  toast(notification.title, { body: notification.body });
+});
+```
+
+For contexts without direct access to these TypeScript types — a non-Node publisher validating a payload before sending, say — `@netiflyjs/core` also exports `notificationJsonSchema`, a JSON Schema (draft-07) describing the same shape, for runtime validation.
+
+### Actionable notifications
+
+`notify()` with `kind: 'action'` adds CTA buttons a user can answer directly — Approve/Reject/Snooze-style — with the answer cryptographically verified server-side before your app ever sees it:
+
+```ts
+await netifly.notify(userId, {
+  kind: 'action',
+  title: 'Approve expense £420?',
+  body: 'Submitted by Sam for Client dinner',
+  actions: [
+    { id: 'approve', label: 'Approve', style: 'primary' },
+    { id: 'reject', label: 'Reject', style: 'danger' },
+  ],
+  expiresAt: Date.now() + 24 * 3600_000,
+  context: { expenseId: 'exp_123' }, // stays server-side; signed into each action's token, never sent as a plain field
+});
+
+netifly.on('action', ({ userId, notificationId, actionId, context }) => {
+  const { expenseId } = context as { expenseId: string };
+  db.expenses.update(expenseId, { status: actionId }); // 'approve' | 'reject'
+});
+```
+
+Requires an `actionSecret` (or `NETIFLY_SECRET` env var) — `createNetifly()`/`createNetiflyPublisher()` **throw at construction** unless one is configured, or you pass `{ actionSecret: false }` to explicitly disable `kind: 'action'` notifications for that server. This is deliberate: an actionable notification's security depends entirely on the signing secret, so a missing one fails loudly at startup rather than silently accepting unsigned/unverifiable actions.
+
+On the client, render each `action.token` from the notification payload and echo it back when the user responds:
+
+```ts
+client.respondToAction(notificationId, 'approve', token);
+
+client.onActionAck(({ status }) => {
+  // 'accepted' | 'already_answered' | 'expired' | 'invalid'
+});
+
+client.onResolved(({ id, action }) => {
+  // fires on every one of the user's connections (including the one that
+  // answered) — use it to update the card everywhere, e.g. disable the buttons
+});
+```
+
+**How it's secure**: each action's token is `base64url({ notificationId, userId, actionId, expiresAt, context }) + '.' + HMAC-SHA256(secret, ...)` — signed, not encrypted, so the server never has to look anything up to recover `context`; it's stateless across instances. On answer, the server verifies the signature (timing-safe), that the token's `userId` matches the answering socket's authenticated user, that it hasn't expired, and — via a Redis `SET NX EX` lock — that nobody has answered this notification's action already. A tampered token, wrong user, expired token, or a second answer to an already-answered notification all come back as a specific `netifly.actionAck` status rather than silently failing.
+
 ## 📱 Client SDK — `@netiflyjs/client`
 
 Without a client, every adopter hand-rolls reconnect logic. `@netiflyjs/client` is the receiving end of everything above: **zero runtime dependencies**, ~1.7 KB minified + gzipped, and built on the standard `WebSocket` global — so it runs unchanged in browsers, React Native, and Node 22+ (the first Node release with `WebSocket` available unflagged, hence this package's `engines: { node: ">=22" }` — the rest of the repo still supports Node 18+).
@@ -448,6 +531,7 @@ rdb.Publish(context.Background(), fmt.Sprintf("netifly:user:%s", userID), envelo
 | `maxInboundFramesPerSecond` | `number` | — | Max inbound client frames (ack/read/response — see [Client acks and read state](#client-acks-and-read-state)) accepted per connection, per second, via a per-connection token bucket shared across all three frame kinds. Frames beyond the limit are dropped and counted via `'malformedFrame'` (reason `'rateLimited'`) rather than closing the connection. Defaults to `20`. ⚠️ If a burst of sends to one connection exceeds this within a second, the client's default-on `autoAck` (see below) can itself exceed the budget — the surplus acks are dropped as `'rateLimited'`, and those notifications never get marked delivered. Raise this alongside your peak per-connection send rate. |
 | `namespace` | `string` | — | Scopes Redis channel names to `netifly:<namespace>:user:<id>` instead of the default `netifly:user:<id>` — use this when multiple apps/environments share one Redis instance (see [Redis Configuration](#-redis-configuration)). Only meaningful when building the default Redis transport from `redisUrl`; pass it to `redisTransport(url, { namespace })` directly if you're passing `transport` explicitly. Defaults to unset (no namespace). |
 | `validate` | `(type: K, data: Events[K]) => void` | — | Optional runtime validation hook (see [Typed events](#typed-events)) — e.g. a Zod/Valibot schema lookup. Called with the resolved `(type, data)` pair before every `send()`/`sendOr()` publishes. Throwing aborts the send and propagates out of the call. Defaults to unset (no validation). |
+| `actionSecret` | `string \| false` | — | HMAC secret for signing `kind: 'action'` notification tokens (see [Actionable notifications](#actionable-notifications)). Falls back to `process.env.NETIFLY_SECRET`. **Throws at construction** unless a secret is resolved or this is explicitly `false` (disables `kind: 'action'` for this server). |
 
 Returns a `NetiflyInstance<Events>`:
 
@@ -456,6 +540,8 @@ Returns a `NetiflyInstance<Events>`:
   - `SendResult` is `{ delivered: boolean; instances: number }`. `instances` is the number of server instances that held a live connection for `userId` at publish time — this comes straight from Redis's own `PUBLISH` return value (the subscriber count), so Netifly can tell you **at publish time** whether the user was reachable, something channel-based systems like Pusher/Ably can't do. `delivered` is just `instances > 0`.
   - ⚠️ **Caveat**: `delivered: true` means the message reached a server process holding a live socket for that user — it does **not** mean the user's client actually received or rendered it. For that, listen for `'delivered'`/`'read'` (see below) — the client's `markRead()`/auto-ack, not this return value, is the source of truth for actual receipt.
 - `sendOr<T>(userId, payload: T, options: { offline: () => void | Promise<void> }): Promise<SendResult>` / `sendOr<K extends keyof Events & string>(userId, type: K, data: Events[K], options): Promise<SendResult>` — sugar over `send()`: calls `send()` with the same arguments, and if the result is `{ delivered: false }`, calls `options.offline()` and awaits it (if it returns a promise) before resolving. Always resolves with the same `SendResult` `send()` would have. A rejection from `offline()` propagates out of `sendOr()` — it's not swallowed.
+- `notify(userId, notification): Promise<SendResult>` / `notifyOr(userId, notification, options): Promise<SendResult>` — validated, opinionated counterparts to `send()`/`sendOr()` for user-facing notifications (see [Events vs. notifications](#events-vs-notifications-when-to-use-send-vs-notify)). `notification` is either `{ kind: 'info', title, body, severity?, link?, icon?, expiresAt?, meta? }` or an actionable `{ kind: 'action', ... }` — see [Actionable notifications](#actionable-notifications) for the action shape's full fields; a validation failure throws `NotificationValidationError` synchronously and nothing is published. Publishes with envelope `type: "notification"`.
+- `on('action', ({ userId, notificationId, actionId, input, context }) => void)` — fires exactly once per answered `kind: 'action'` notification, on whichever instance the client's `respondToAction()` frame physically arrived at (never once per subscribed instance — same exactly-once model as `'delivered'`/`'read'`/`'response'`). `context` is whatever `notify()` was called with, recovered from the signed token — never trusted from the client. Also relayed to the user's other open connections as `netifly.notification.resolved`, and the answering socket alone gets a `netifly.actionAck` with `status: 'accepted' | 'already_answered' | 'expired' | 'invalid'`.
 - `disconnect(userId): void` — **known limitation: this only closes connections on the local instance.** In a multi-instance deployment, a user may still be connected on other instances after calling this. It is not a cluster-wide "force logout." Workarounds: call `disconnect(userId)` on every instance (e.g. via a pub/sub broadcast of your own), or prefer short-lived auth tokens that `resolveUserId` rejects once revoked, so stale connections are cut off the next time they'd need to reconnect/re-authenticate.
 - `on('connect' | 'disconnect', (userId) => void)`, `on('error', (error) => void)`, `on('reject', ({ reason, status, ... }) => void)`, `on('dropped', ({ userId, reason }) => void)` — **Attaching an `'error'` listener is effectively required for production use** — Netifly never throws into the host process (an unhandled `'error'` emit with no listener would crash it), so without a listener attached, connection failures (with the default Redis transport) are completely invisible.
   - `reject` fires when an upgrade is rejected before a connection is established. `reason: 'origin'` is the Origin/CSWSH check (`{ status: 403, origin, req }`); `reason: 'maxConnectionsPerUser'` fires when a `userId` is already at `maxConnectionsPerUser` **on this instance** (`{ status: 429, userId, req }`) — it does not mean the user is at the cap cluster-wide (see [Limits](#limits)); `reason: 'auth'` fires when `resolveUserId` rejects the connection — returns a falsy value, or throws (`{ status: 401, error, req }`, where `error` is the thrown `Error`, or `undefined` if `resolveUserId` simply returned a falsy value without throwing).
@@ -491,10 +577,12 @@ Supports the same `<Events>` type parameter and `validate` option as `createNeti
 | `redisUrl` | `string` | — | Falls back to `process.env.REDIS_URL` if omitted. One of the two **must** be provided — throws at construction time if neither is set, same as `createNetifly`. |
 | `namespace` | `string` | — | Scopes Redis channel names the same way `createNetifly`'s `namespace` does — must match the value used by the `createNetifly()` server(s) this publisher should reach. Defaults to unset (no namespace). |
 | `validate` | `(type: K, data: Events[K]) => void` | — | Same runtime validation hook as `createNetifly`'s `validate` — called with the resolved `(type, data)` pair before every `send()` publishes; throwing aborts the send. Defaults to unset (no validation). |
+| `actionSecret` | `string \| false` | — | Same resolution/throw behavior as `createNetifly`'s `actionSecret` — must match the secret used by the `createNetifly()` server(s) this publisher should reach, since only a connected server (never a publisher) can verify an answer. |
 
 Returns a `NetiflyPublisher<Events>` — a lighter-weight, send-only counterpart to `NetiflyInstance`, backed by a single lazily-connected Redis client (no subscriber connection, no WebSocket server):
 
 - `send<T>(userId, payload: T): Promise<SendResult>` / `send<K extends keyof Events & string>(userId, type: K, data: Events[K]): Promise<SendResult>` — identical envelope/delivery semantics to `NetiflyInstance.send()` (see [Message Envelope](#-message-envelope) above for the shape, and `createNetifly`'s `send()` entry above for the `SendResult`/`delivered` caveat, and [Typed events](#typed-events) for the `Events`-checked overload).
+- `notify(userId, notification): Promise<SendResult>` — same validated notification API as `NetiflyInstance.notify()` above. No `notifyOr()` on `NetiflyPublisher`, matching its existing `send()`-only (no `sendOr()`) surface.
 - `isOnline(userId): Promise<boolean>` / `whoIsOnline(userIds): Promise<Record<string, boolean>>` — identical semantics/caveats to `NetiflyInstance`'s.
 - `close(): Promise<void>` — disconnects the publisher's Redis connection. Call it before a short-lived process (e.g. a serverless invocation) exits. Calling `send()`/`isOnline()`/`whoIsOnline()` after `close()` throws `Netifly: cannot use publisher after close()`.
 
@@ -522,6 +610,9 @@ Returns a `NetiflyClient<Events>`:
 - `onAny(handler: (envelope: Envelope) => void): () => void` — every envelope, whatever its type — including relayed `netifly.ack`/`netifly.read`/`netifly.response` frames (see below), so filter on `envelope.type` if you only want application events.
 - `markRead(id: string): void` — sends `{ type: 'read', id }`, so the server fires `'read'` (see [above](#client-acks-and-read-state)) and relays it to the user's other tabs/devices. `id` is normally an envelope's `id` from a handler or `onAny`. Silent no-op if not currently connected — same as any other in-flight message during an outage.
 - `respond(id: string, payload: unknown): void` — sends `{ type: 'response', id, payload }` with an arbitrary JSON-serializable payload (e.g. a reply to an action button), firing the server's `'response'` event. Same no-op-when-disconnected behavior as `markRead()`. ⚠️ `payload` counts against the server's `maxPayload` (default 4 KB) — `ws` enforces that by **closing the connection** (code `1009`), which is otherwise never how this feature behaves for a bad/oversized frame. Keep `payload` small, or raise `maxPayload` on the server if you need more room.
+- `respondToAction(id, action, token, input?): void` — sends `{ type: 'action', id, action, token, input }`. `token` is the specific action's signed token from the notification payload (see [Actionable notifications](#actionable-notifications)). No-op if not connected.
+- `onActionAck((info) => void): () => void` — the server's direct reply to `respondToAction()`: `{ id, action, status }` where `status` is `'accepted' | 'already_answered' | 'expired' | 'invalid'`.
+- `onResolved((info) => void): () => void` — `netifly.notification.resolved`: `{ id, action }`, fires on every one of the user's connections (including the one that answered) when an actionable notification is answered.
 - `onStateChange(handler: (state: ConnectionState) => void): () => void` — connection lifecycle: `'connecting'` (handshake in flight), `'open'`, `'reconnecting'` (waiting out a backoff delay), `'closed'` (down and not retrying).
 - `onClose(handler: ({ code, reason, wasClean }) => void): () => void` — the raw close event, for logging or your own policy on top.
 - `onError(handler: (error: Error) => void): () => void` — a rejected `getToken()`, an unparseable message, a throwing handler (which never breaks the other handlers), or giving up after `maxReconnectAttempts`.
@@ -529,7 +620,7 @@ Returns a `NetiflyClient<Events>`:
 - `lastEventId: string | undefined` — `id` of the most recent envelope received, tracked for future replay support.
 - `protocol: string` — the subprotocol the server selected, or `''`.
 
-**Reserved `netifly.` envelope type prefix**: relayed acks/reads/responses (see [above](#client-acks-and-read-state)) arrive as ordinary envelopes with `type` set to `'netifly.ack'`, `'netifly.read'`, or `'netifly.response'` — this reuses the existing `on()`/`onAny()` path with no new client-side parsing. Don't use a `netifly.`-prefixed key in your own `Events` map: `autoAck` skips these types on purpose (acking a relay frame would ack the wrong `id`), so a colliding app event would silently never get auto-acked.
+**Reserved `netifly.` envelope type prefix**: relayed acks/reads/responses (see [above](#client-acks-and-read-state)) arrive as ordinary envelopes with `type` set to `'netifly.ack'`, `'netifly.read'`, `'netifly.response'`, `'netifly.actionAck'`, or `'netifly.notification.resolved'` — this reuses the existing `on()`/`onAny()` path with no new client-side parsing. Don't use a `netifly.`-prefixed key in your own `Events` map: `autoAck` skips these types on purpose (acking a relay frame would ack the wrong `id`), so a colliding app event would silently never get auto-acked.
 
 The package also exports `fullJitterDelay(attempt, base, cap)` and `planReconnect(wasOpen, code)` — the pure functions behind the behavior in the [table above](#reconnecting) — plus the `Envelope`, `EventMap`, `ConnectionState`, `CloseInfo` and `NetiflyClientOptions` types and `ENVELOPE_VERSION`. `Envelope`/`EventMap` are deliberately re-declared here rather than imported from `@netiflyjs/core` (which would pull `ws` and `ioredis` into a browser bundle); they are the same [wire contract](#-message-envelope) both sides implement.
 
