@@ -1,3 +1,44 @@
+# [@netiflyjs/core-v2.0.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.12.0...@netiflyjs/core-v2.0.0) (2026-10-07)
+
+
+### Bug Fixes
+
+* address final-review findings (NOT-38) ([52c9726](https://github.com/NetiflyJS/netifly/commit/52c9726c4e1967090a179d9fa1cf39b30afb218d))
+* **core:** ack 'invalid' when transport.claim() fails, so an action frame is never left unanswered (NOT-38) ([9aedfb7](https://github.com/NetiflyJS/netifly/commit/9aedfb78e82ed0fe1931431e369c353398595ae0))
+* **core:** add null/object guards and protocol-relative URL protection to validateNotification (NOT-37) ([b367049](https://github.com/NetiflyJS/netifly/commit/b367049a067eb2a26e458399b3b6465e2a634f22))
+* **core:** address final review findings — link-safety bypass, schema/runtime drift, icon/expiresAt/meta validation, client docs (NOT-37) ([24fc12a](https://github.com/NetiflyJS/netifly/commit/24fc12a0b409ae391ad8057e93fb95e1a814fe9a))
+* **core:** clear drain timer after graceful close to avoid leaking it (NOT-19) ([c883157](https://github.com/NetiflyJS/netifly/commit/c883157aebfcc05cd870b3d0532a6291aee30873))
+* **core:** eliminate connect-race hazard in netiflyPublisher.test.ts ([730244f](https://github.com/NetiflyJS/netifly/commit/730244f07bee2798513a7147cd9de85197fb3713))
+* **core:** reject tampered action tokens with trailing invalid hex in the signature ([8fb7c2f](https://github.com/NetiflyJS/netifly/commit/8fb7c2fb1bba44fbc1be9b595071d543fbfdad71))
+* **core:** revert out-of-scope action handling in netiflyServer ([75ca488](https://github.com/NetiflyJS/netifly/commit/75ca4885019b23dd9be67b86290dbe262ffe5a1c))
+* **core:** uniquify claim() test keys per run to avoid local Redis TTL re-run collisions (NOT-38) ([bea34a4](https://github.com/NetiflyJS/netifly/commit/bea34a4adc52fd298f904c7ac500adff3619e811))
+* **lint:** allow destructure-to-omit pattern in no-unused-vars ([b0889e2](https://github.com/NetiflyJS/netifly/commit/b0889e21bfeddea0d6576dcc0c89d543eb0fcb30))
+
+
+### Features
+
+* **core:** actionable notifications — verified answers, 'action' event, resolved relay (NOT-38) ([60617cd](https://github.com/NetiflyJS/netifly/commit/60617cd79e2b4e92ad2fe4fd5d9689254bc7669d))
+* **core:** add actionSecret resolution for actionable notifications (NOT-38) ([93cd6b9](https://github.com/NetiflyJS/netifly/commit/93cd6b94287cdf2661475c4345a404ced14ea8af))
+* **core:** add NetiflyInstance.notify()/notifyOr() (NOT-37) ([7925152](https://github.com/NetiflyJS/netifly/commit/79251525007d95b0b5cd07da94a06481936b0a03))
+* **core:** add NetiflyPublisher.notify() (NOT-37) ([708b2bb](https://github.com/NetiflyJS/netifly/commit/708b2bb944dc0ac458a47af6e3420af4b365f572))
+* **core:** add NetiflyTransport.claim() — atomic answered-lock primitive for actionable notifications (NOT-38) ([3d32411](https://github.com/NetiflyJS/netifly/commit/3d32411a9bf276d017a7acd16f3e61c43c1a6eeb))
+* **core:** add notify() notification schema and validation (NOT-37) ([2a66a4d](https://github.com/NetiflyJS/netifly/commit/2a66a4d580fe7e2599beee89b89c30354a0be07e))
+* **core:** add signed action token construction and verification (NOT-38) ([c005a61](https://github.com/NetiflyJS/netifly/commit/c005a61d404f2f7440529e0acf1880a1f6708fd2))
+* **core:** export actionable notification types, widen JSON schema, add type tests (NOT-38) ([8540f1a](https://github.com/NetiflyJS/netifly/commit/8540f1af5507ecd2b6171cd7abc65ec2afa85421))
+* **core:** export notify() types, JSON schema, and type tests (NOT-37) ([41f387c](https://github.com/NetiflyJS/netifly/commit/41f387c575ca5a43ce9a3bfc454fbb77e050428c))
+* **core:** NetiflyPublisher.notify(kind:'action') (NOT-38) ([a9b85ed](https://github.com/NetiflyJS/netifly/commit/a9b85edb62b4e55ab11003b7827a0489574f1e22))
+* **core:** parse the inbound 'action' frame (NOT-38) ([61463ac](https://github.com/NetiflyJS/netifly/commit/61463ac431f0aa50a42eedf765175b684e7289f5))
+* **core:** widen notify() to kind:'action' with validation (NOT-38) ([eac988f](https://github.com/NetiflyJS/netifly/commit/eac988f87a96e3a3062166dcbdd9e538ea5d4268))
+
+
+### BREAKING CHANGES
+
+* **core:** createNetifly()/createNetiflyPublisher() now throw at
+construction unless actionSecret or NETIFLY_SECRET is set, or
+actionSecret: false is passed explicitly.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
 # [@netiflyjs/core-v1.12.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/core-v1.11.0...@netiflyjs/core-v1.12.0) (2026-09-29)
 
 
