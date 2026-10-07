@@ -1,3 +1,26 @@
+# [@netiflyjs/client-v2.0.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/client-v1.1.0...@netiflyjs/client-v2.0.0) (2026-10-07)
+
+
+### Bug Fixes
+
+* address final-review findings (NOT-38) ([52c9726](https://github.com/NetiflyJS/netifly/commit/52c9726c4e1967090a179d9fa1cf39b30afb218d))
+* **core:** address final review findings — link-safety bypass, schema/runtime drift, icon/expiresAt/meta validation, client docs (NOT-37) ([24fc12a](https://github.com/NetiflyJS/netifly/commit/24fc12a0b409ae391ad8057e93fb95e1a814fe9a))
+
+
+### Features
+
+* **client:** add respondToAction()/onActionAck()/onResolved() (NOT-38) ([7c6c1b8](https://github.com/NetiflyJS/netifly/commit/7c6c1b81bf0b062bf1576951b3968ff86ce7baac))
+* **core:** actionable notifications — verified answers, 'action' event, resolved relay (NOT-38) ([60617cd](https://github.com/NetiflyJS/netifly/commit/60617cd79e2b4e92ad2fe4fd5d9689254bc7669d))
+
+
+### BREAKING CHANGES
+
+* **core:** createNetifly()/createNetiflyPublisher() now throw at
+construction unless actionSecret or NETIFLY_SECRET is set, or
+actionSecret: false is passed explicitly.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
 # [@netiflyjs/client-v1.1.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/client-v1.0.0...@netiflyjs/client-v1.1.0) (2026-09-28)
 
 
