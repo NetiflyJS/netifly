@@ -24,5 +24,17 @@ module.exports = {
       files: ['packages/client/src/**/*.ts'],
       env: { browser: true },
     },
+    {
+      // @netiflyjs/react's hooks and the example app that exercises them
+      // are browser-facing React/JSX, with the hooks-correctness rules
+      // (exhaustive-deps, rules-of-hooks) that don't apply anywhere else.
+      files: ['packages/react/src/**/*.{ts,tsx}', 'examples/react/src/**/*.{ts,tsx}'],
+      env: { browser: true },
+      plugins: ['react-hooks'],
+      rules: {
+        'react-hooks/rules-of-hooks': 'error',
+        'react-hooks/exhaustive-deps': 'warn',
+      },
+    },
   ],
 };

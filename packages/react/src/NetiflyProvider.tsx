@@ -20,7 +20,7 @@ export interface NetiflyContextValue<Events extends EventMap = EventMap> {
 
 const NetiflyContext = createContext<NetiflyContextValue<EventMap> | null>(null);
 
-export type NetiflyProviderProps<Events extends EventMap = EventMap> = NetiflyClientOptions & {
+export type NetiflyProviderProps = NetiflyClientOptions & {
   children: ReactNode;
 };
 
@@ -34,7 +34,7 @@ export type NetiflyProviderProps<Events extends EventMap = EventMap> = NetiflyCl
 export function NetiflyProvider<Events extends EventMap = EventMap>({
   children,
   ...options
-}: NetiflyProviderProps<Events>): ReactNode {
+}: NetiflyProviderProps): ReactNode {
   const [{ client, store }] = useState(() => {
     const client = createNetiflyClient<Events>(options);
     return { client, store: createNotificationStore(client) };
