@@ -46,6 +46,10 @@ if a managed service is an acceptable trade for not running your own Redis.
   typed-events pattern.
 - **[Security](security.md)** — the origin allowlist, cookie vs. token auth,
   and the built-in abuse-vector limits.
+- **[Concepts](concepts/README.md)** — the backend/frontend hook lifecycle,
+  single/multi-user/two-way publishing patterns, and how persistence
+  actually works (Netifly stores nothing — this is the bring-your-own-DB
+  guide, plus the current gaps like no replay-on-reconnect).
 - **Recipes** — [email when a user is offline](recipes/email-when-offline.md),
   [notifying from a BullMQ worker](recipes/notify-from-a-bullmq-worker.md),
   [handling reconnects and token refresh](recipes/client-reconnects-and-token-refresh.md),

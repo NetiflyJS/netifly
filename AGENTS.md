@@ -94,7 +94,8 @@ in this repo — that folder is the source of truth, not GitBook's editor.
 
 - Content lives in `docs/site/` using GitBook's Git Sync format: a root
   `README.md` (the site's front page), a `SUMMARY.md` that defines the nav
-  tree, and nested folders/files matching it (e.g. `recipes/`, `reference/`).
+  tree, and nested folders/files matching it (e.g. `concepts/`, `recipes/`,
+  `reference/`).
 - **Adding a page means two edits**: the file under `docs/site/`, *and* an
   entry in `docs/site/SUMMARY.md` — GitBook will not display a page that
   isn't listed there. Every link in `SUMMARY.md` and between docs pages must
