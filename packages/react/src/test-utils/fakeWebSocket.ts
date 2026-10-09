@@ -28,6 +28,16 @@ export class FakeWebSocket {
   readyState = FakeWebSocket.CONNECTING;
   protocol = '';
   readonly sentFrames: unknown[] = [];
+  /**
+   * True as soon as `close()` is called, independent of `readyState`'s own
+   * (synchronous, simplified) transition — real close() is asynchronous
+   * (CLOSING, then CLOSED later), so a test asserting "exactly one socket
+   * is still live" must not do it by reading `readyState` at an arbitrary
+   * later point, which only works if close() happens to resolve
+   * synchronously here. This flag is true the instant close() is asked
+   * for, which is true under either timing model.
+   */
+  closeRequested = false;
 
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
@@ -61,6 +71,7 @@ export class FakeWebSocket {
   }
 
   close(code = 1000, reason = ''): void {
+    this.closeRequested = true;
     if (this.readyState === FakeWebSocket.CLOSED) return;
     this.readyState = FakeWebSocket.CLOSED;
     this.dispatch('close', { code, reason, wasClean: code === 1000 });

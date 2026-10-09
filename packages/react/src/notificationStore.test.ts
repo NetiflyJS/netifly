@@ -166,6 +166,89 @@ describe('createNotificationStore', () => {
 
       expect(await store.respond('no-such-notification', 'approve')).toBe('invalid');
     });
+
+    it('resolves "invalid" immediately when the client is not connected, instead of hanging forever', async () => {
+      const { socket, client } = makeConnectedClient();
+      const store = createNotificationStore(client);
+      deliverNotification(socket, 'n1', actionNotification());
+      // A transient disconnect: client.state becomes 'reconnecting', not 'open'.
+      socket.simulateServerClose(1006, '', false);
+      expect(client.state).toBe('reconnecting');
+      socket.sentFrames.length = 0;
+
+      const result = await store.respond('n1', 'approve');
+
+      expect(result).toBe('invalid');
+      expect(socket.sentFrames).toEqual([]);
+    });
+  });
+
+  describe('markRead()/markAllRead() while disconnected', () => {
+    it('markRead() does not flip local status when the frame cannot be sent', () => {
+      const { socket, client } = makeConnectedClient();
+      const store = createNotificationStore(client);
+      deliverNotification(socket, 'n1', { kind: 'info', title: 'Hi', body: 'x' });
+      socket.simulateServerClose(1006, '', false);
+      expect(client.state).toBe('reconnecting');
+
+      store.markRead('n1');
+
+      expect(store.getSnapshot()[0].status).toBe('unread');
+    });
+
+    it('markAllRead() does not flip local status when the frame cannot be sent', () => {
+      const { socket, client } = makeConnectedClient();
+      const store = createNotificationStore(client);
+      deliverNotification(socket, 'n1', { kind: 'info', title: 'Hi', body: 'x' });
+      socket.simulateServerClose(1006, '', false);
+
+      store.markAllRead();
+
+      expect(store.getSnapshot()[0].status).toBe('unread');
+    });
+  });
+
+  describe('dispose()', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('cancels pending expiry timers so they never fire after dispose', () => {
+      const now = Date.now();
+      const { socket, client } = makeConnectedClient();
+      const store = createNotificationStore(client);
+      deliverNotification(socket, 'n1', actionNotification(now + 5000), now);
+
+      store.dispose();
+      jest.advanceTimersByTime(5000);
+
+      expect(store.getSnapshot()[0].status).toBe('unread');
+    });
+
+    it('stops reacting to further client events after dispose', () => {
+      const { socket, client } = makeConnectedClient();
+      const store = createNotificationStore(client);
+      store.dispose();
+
+      deliverNotification(socket, 'n1', { kind: 'info', title: 'Hi', body: 'x' });
+
+      expect(store.getSnapshot()).toEqual([]);
+    });
+
+    it('settles any pending respond() promise instead of leaving it hanging forever', async () => {
+      const { socket, client } = makeConnectedClient();
+      const store = createNotificationStore(client);
+      deliverNotification(socket, 'n1', actionNotification());
+
+      const pending = store.respond('n1', 'approve');
+      store.dispose();
+
+      expect(await pending).toBe('invalid');
+    });
   });
 
   describe('expiry', () => {

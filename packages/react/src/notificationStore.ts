@@ -17,6 +17,7 @@ export interface NotificationStore {
   markAllRead(): void;
   dismiss(id: string): void;
   respond(notificationId: string, actionId: string, input?: unknown): Promise<RespondResult>;
+  dispose(): void;
 }
 
 /**
@@ -28,6 +29,7 @@ export function createNotificationStore(client: NetiflyClient): NotificationStor
   const listeners = new Set<() => void>();
   const pendingResponses = new Map<string, (status: RespondResult) => void>();
   const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let disposed = false;
 
   function emit(): void {
     for (const listener of [...listeners]) listener();
@@ -63,7 +65,7 @@ export function createNotificationStore(client: NetiflyClient): NotificationStor
     );
   }
 
-  client.onNotification((notification, envelope) => {
+  const unsubscribeNotification = client.onNotification((notification, envelope) => {
     const item: NotificationItem = {
       id: envelope.id,
       receivedAt: envelope.ts,
@@ -74,7 +76,7 @@ export function createNotificationStore(client: NetiflyClient): NotificationStor
     scheduleExpiry(item);
   });
 
-  client.onActionAck(({ id, action, status }) => {
+  const unsubscribeActionAck = client.onActionAck(({ id, action, status }) => {
     pendingResponses.get(`${id}:${action}`)?.(status);
     pendingResponses.delete(`${id}:${action}`);
     if (status === 'accepted' || status === 'already_answered') {
@@ -84,7 +86,7 @@ export function createNotificationStore(client: NetiflyClient): NotificationStor
     }
   });
 
-  client.onResolved(({ id }) => {
+  const unsubscribeResolved = client.onResolved(({ id }) => {
     markStatus(id, 'answered');
   });
 
@@ -95,12 +97,14 @@ export function createNotificationStore(client: NetiflyClient): NotificationStor
       return () => listeners.delete(listener);
     },
     markRead(id) {
+      if (client.state !== 'open') return;
       client.markRead(id);
       setItems(
         items.map((item) => (item.id === id && item.status === 'unread' ? { ...item, status: 'read' } : item))
       );
     },
     markAllRead() {
+      if (client.state !== 'open') return;
       const unread = items.filter((item) => item.status === 'unread');
       if (unread.length === 0) return;
       for (const item of unread) client.markRead(item.id);
@@ -120,13 +124,25 @@ export function createNotificationStore(client: NetiflyClient): NotificationStor
         item && item.notification.kind === 'action'
           ? item.notification.actions.find((a) => a.id === actionId)
           : undefined;
-      if (!action) {
+      if (!action || client.state !== 'open') {
         return Promise.resolve('invalid');
       }
       return new Promise((resolve) => {
         pendingResponses.set(`${notificationId}:${actionId}`, resolve);
         client.respondToAction(notificationId, actionId, action.token, input);
       });
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      unsubscribeNotification();
+      unsubscribeActionAck();
+      unsubscribeResolved();
+      for (const timer of expiryTimers.values()) clearTimeout(timer);
+      expiryTimers.clear();
+      for (const resolve of pendingResponses.values()) resolve('invalid');
+      pendingResponses.clear();
+      listeners.clear();
     },
   };
 }

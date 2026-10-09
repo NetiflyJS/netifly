@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   createNetiflyClient,
@@ -30,13 +30,25 @@ export type NetiflyProviderProps = NetiflyClientOptions & {
  * together inside one lazy `useState` initializer, so under StrictMode's
  * double-invoke only one pair ever gets attached to an effect — the
  * discarded pair never calls `connect()` and is simply garbage.
+ *
+ * `url`/`getToken`/etc. are read once at mount, not reconnected on change —
+ * except `getToken` itself, which is re-read from a ref on every (re)connect
+ * attempt so a token obtained from a later render (e.g. after a refresh) is
+ * what a subsequent reconnect actually presents, not the closure captured
+ * when the client was first constructed.
  */
 export function NetiflyProvider<Events extends EventMap = EventMap>({
   children,
   ...options
 }: NetiflyProviderProps): ReactNode {
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   const [{ client, store }] = useState(() => {
-    const client = createNetiflyClient<Events>(options);
+    const client = createNetiflyClient<Events>({
+      ...optionsRef.current,
+      getToken: optionsRef.current.getToken ? () => optionsRef.current.getToken!() : undefined,
+    });
     return { client, store: createNotificationStore(client) };
   });
   const [status, setStatus] = useState<ConnectionState>(client.state);
@@ -47,8 +59,9 @@ export function NetiflyProvider<Events extends EventMap = EventMap>({
     return () => {
       unsubscribe();
       client.close();
+      store.dispose();
     };
-  }, [client]);
+  }, [client, store]);
 
   const value: NetiflyContextValue<EventMap> = {
     client: client as unknown as NetiflyClient<EventMap>,

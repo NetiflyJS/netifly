@@ -682,6 +682,7 @@ describe('NetiflyClient', () => {
       const client = makeClient(server.port);
       client.connect();
       await nextState(client, 'open');
+      await wait(50);
 
       const received = new Promise<WireNotification>((resolve) => {
         const off = client.onNotification((notification) => {
