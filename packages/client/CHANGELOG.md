@@ -1,3 +1,16 @@
+# [@netiflyjs/client-v2.1.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/client-v2.0.0...@netiflyjs/client-v2.1.0) (2026-10-09)
+
+
+### Bug Fixes
+
+* **client:** avoid connect/notify race in onNotification() test (NOT-22) ([2d14b44](https://github.com/NetiflyJS/netifly/commit/2d14b446c146d7c3a3d5303426337b8c81e80db1))
+* **react:** address final-review findings — respond() hang, stale getToken, store teardown (NOT-22) ([7a766ac](https://github.com/NetiflyJS/netifly/commit/7a766ac4ddc2bd843303fc516b957dda9a523c64))
+
+
+### Features
+
+* **client:** add onNotification() and notification wire types (NOT-22) ([d622731](https://github.com/NetiflyJS/netifly/commit/d6227310620a8acb4d687b2beb8b5358eb176566))
+
 # [@netiflyjs/client-v2.0.0](https://github.com/NetiflyJS/netifly/compare/@netiflyjs/client-v1.1.0...@netiflyjs/client-v2.0.0) (2026-10-07)
 
 
