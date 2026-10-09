@@ -1,6 +1,6 @@
 {
   "name": "@netiflyjs/react",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "React provider and hooks (useNetifly, useEvent, useNotifications) for Netifly — StrictMode-safe, SSR-safe.",
   "keywords": [
     "netifly",
