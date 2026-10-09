@@ -46,6 +46,8 @@ npm install @netiflyjs/core
 npm install @netiflyjs/core @netiflyjs/express
 # and, in your frontend (or any WebSocket client):
 npm install @netiflyjs/client
+# or, in a React frontend:
+npm install @netiflyjs/react @netiflyjs/client
 ```
 
 ## 🚀 Quickstart
@@ -345,6 +347,70 @@ Omit `getToken` entirely for cookie-based auth; the browser attaches cookies to 
 
 `client.lastEventId` is the `id` of the most recent [envelope](#-message-envelope) received — a sortable ULID. The client tracks it but does not yet resume from it; it's here so apps can persist it now, ahead of replay-on-reconnect support.
 
+## ⚛️ React — `@netiflyjs/react`
+
+Without this package, every React adopter wires `@netiflyjs/client` into effects by hand: one socket per app, subscribe/cleanup, a list of notifications, an unread count — easy to get subtly wrong, especially under StrictMode's double-invoked effects. `@netiflyjs/react` turns that into a provider and three hooks.
+
+```bash
+npm install @netiflyjs/react @netiflyjs/client
+```
+
+```tsx
+import { NetiflyProvider, useEvent, useNotifications } from '@netiflyjs/react';
+
+// The same Events map your server passes to createNetifly<Events>()
+type Events = {
+  'comment.created': { commentId: string };
+};
+
+function App() {
+  return (
+    <NetiflyProvider url="wss://api.example.com/netifly" getToken={() => session.accessToken}>
+      <Inbox />
+    </NetiflyProvider>
+  );
+}
+
+function Inbox() {
+  // Raw typed events — useEvent<Events, K> takes both type arguments
+  // explicitly, since (unlike client.on()) it isn't bound to an already-typed client instance.
+  useEvent<Events, 'comment.created'>('comment.created', (data) => toast(`New comment: ${data.commentId}`));
+
+  // Standard notifications: info + actionable, backed by one shared in-memory store
+  const { items, unreadCount, markRead, dismiss, respond } = useNotifications();
+
+  return (
+    <>
+      <span>{unreadCount} unread</span>
+      {items.map((item) => (
+        <article key={item.id}>
+          <strong>{item.notification.title}</strong>
+          <p>{item.notification.body}</p>
+          {item.notification.kind === 'action' ? (
+            item.notification.actions.map((action) => (
+              <button key={action.id} onClick={() => respond(item.id, action.id)}>
+                {action.label}
+              </button>
+            ))
+          ) : (
+            <button onClick={() => markRead(item.id)}>Mark read</button>
+          )}
+          <button onClick={() => dismiss(item.id)}>Dismiss</button>
+        </article>
+      ))}
+    </>
+  );
+}
+```
+
+`<NetiflyProvider>` creates and owns a single `NetiflyClient`, connecting on mount and closing on unmount — StrictMode-safe (one connection, however many times effects re-run in development: see [the API reference](#netiflyprovider-url-gettoken--netiflyjsreact) for why) and SSR-safe (no socket ever opens outside an effect, so it's safe to import in Next.js with no guards — `renderToString`/`renderToPipeableStream` never touch `connect()`).
+
+`respond(notificationId, actionId, input?)` is deliberately a hook-level convenience, not a `NetiflyClient` method: it looks up the right action's signed token from the notification already sitting in the store and calls `client.respondToAction()` for you, resolving once the server's `netifly.actionAck` arrives (or immediately with `'invalid'` if the id/action isn't known locally).
+
+Replay/catch-up on reconnect, and persisting the inbox across a refresh, are **not** this package's job yet — planned as opt-in, Redis Streams-backed replay in a future release. Headless, styled UI components (a notification card, a bell icon with a badge) are planned to build on these same hooks in a separate package.
+
+An example app lives in [`examples/react`](examples/react) — a toast list (`aria-live="polite"`), an unread badge, and an Approve/Reject actionable notification, in plain markup.
+
 ## 🔐 Redis Configuration
 
 Netifly requires a Redis connection string — never hardcode credentials. Provide it either as an environment variable:
@@ -613,6 +679,7 @@ Returns a `NetiflyClient<Events>`:
 - `respondToAction(id, action, token, input?): void` — sends `{ type: 'action', id, action, token, input }`. `token` is the specific action's signed token from the notification payload (see [Actionable notifications](#actionable-notifications)). No-op if not connected.
 - `onActionAck((info) => void): () => void` — the server's direct reply to `respondToAction()`: `{ id, action, status }` where `status` is `'accepted' | 'already_answered' | 'expired' | 'invalid'`.
 - `onResolved((info) => void): () => void` — `netifly.notification.resolved`: `{ id, action }`, fires on every one of the user's connections (including the one that answered) when an actionable notification is answered.
+- `onNotification((data, envelope) => void): () => void` — subscribes to `notify()`-sent notifications specifically, typed as `WireNotification`. Purely additive: the same envelope still flows through `on('notification', ...)`/`onAny()` exactly as before (see [Events vs. notifications](#events-vs-notifications-when-to-use-send-vs-notify)) — this is a convenience for the common case of wanting notifications on their own channel, not a replacement.
 - `onStateChange(handler: (state: ConnectionState) => void): () => void` — connection lifecycle: `'connecting'` (handshake in flight), `'open'`, `'reconnecting'` (waiting out a backoff delay), `'closed'` (down and not retrying).
 - `onClose(handler: ({ code, reason, wasClean }) => void): () => void` — the raw close event, for logging or your own policy on top.
 - `onError(handler: (error: Error) => void): () => void` — a rejected `getToken()`, an unparseable message, a throwing handler (which never breaks the other handlers), or giving up after `maxReconnectAttempts`.
@@ -622,7 +689,25 @@ Returns a `NetiflyClient<Events>`:
 
 **Reserved `netifly.` envelope type prefix**: relayed acks/reads/responses (see [above](#client-acks-and-read-state)) arrive as ordinary envelopes with `type` set to `'netifly.ack'`, `'netifly.read'`, `'netifly.response'`, `'netifly.actionAck'`, or `'netifly.notification.resolved'` — this reuses the existing `on()`/`onAny()` path with no new client-side parsing. Don't use a `netifly.`-prefixed key in your own `Events` map: `autoAck` skips these types on purpose (acking a relay frame would ack the wrong `id`), so a colliding app event would silently never get auto-acked.
 
-The package also exports `fullJitterDelay(attempt, base, cap)` and `planReconnect(wasOpen, code)` — the pure functions behind the behavior in the [table above](#reconnecting) — plus the `Envelope`, `EventMap`, `ConnectionState`, `CloseInfo` and `NetiflyClientOptions` types and `ENVELOPE_VERSION`. `Envelope`/`EventMap` are deliberately re-declared here rather than imported from `@netiflyjs/core` (which would pull `ws` and `ioredis` into a browser bundle); they are the same [wire contract](#-message-envelope) both sides implement.
+The package also exports `fullJitterDelay(attempt, base, cap)` and `planReconnect(wasOpen, code)` — the pure functions behind the behavior in the [table above](#reconnecting) — plus the `Envelope`, `EventMap`, `ConnectionState`, `CloseInfo` and `NetiflyClientOptions` types and `ENVELOPE_VERSION`. `Envelope`/`EventMap` are deliberately re-declared here rather than imported from `@netiflyjs/core` (which would pull `ws` and `ioredis` into a browser bundle); they are the same [wire contract](#-message-envelope) both sides implement. The notification shapes (`Notification`, `InfoNotification`, `ActionNotification`, `NotificationAction`, `WireNotification`, `NotificationSeverity`, `NotificationLink`) are re-declared the same way, for `onNotification()` above.
+
+### `<NetiflyProvider url getToken>` — `@netiflyjs/react`
+
+Same `options` as `createNetiflyClient` (see [above](#createnetiflyclienteventsoptions--netiflyjsclient)), passed as props. Creates and owns a single `NetiflyClient`, connecting on mount and closing on unmount. The client is created inside a lazy `useState` initializer rather than an effect, so under React 18 StrictMode's dev-only double-invoke — which calls that initializer twice, then runs the mount effect, its cleanup, and the mount effect again — only one `NetiflyClient` instance is ever kept; the discarded one from the extra initializer call never gets attached to an effect, so it never calls `connect()` and is simply garbage. That one real client still sees its own connect → close → connect churn from the synthetic remount, same as any effect with StrictMode on — by design, not a double connection, since the first socket is fully closed before the second opens.
+
+No socket is ever opened outside that effect, so constructing the tree during SSR (`renderToString`, `renderToPipeableStream`) is always socket-free — safe to import in Next.js (App Router or Pages) with no `typeof window` guards.
+
+- `useNetifly<Events>(): { client: NetiflyClient<Events>, status: ConnectionState }` — throws `Error('useNetifly() must be used within a <NetiflyProvider>')` outside the provider.
+- `useEvent<Events, K>(type: K, handler: (data: Events[K], envelope: Envelope<Events[K]>) => void): void` — subscribes to one application event, same as `client.on()`. Keeps `handler` in a ref and only resubscribes when `type` (or the client) changes — passing a new inline closure on every render never tears down and recreates the subscription, and the *latest* handler is always the one invoked. Unsubscribes on unmount.
+- `useNotifications<Events>(): UseNotificationsResult` — reads a small in-memory store, one per `<NetiflyProvider>`, shared by every component that calls the hook (via `useSyncExternalStore`, so it's safe under concurrent rendering and never tears). Returns:
+  - `items: NotificationItem[]` — newest first; `{ id, receivedAt, status, notification }` where `status` is `'unread' | 'read' | 'answered' | 'expired'` and `notification` is the `WireNotification` from `@netiflyjs/client`.
+  - `unreadCount: number`
+  - `markRead(id): void` / `markAllRead(): void` — send `markRead()` to the server and flip local status.
+  - `dismiss(id): void` — removes the item locally only; there's no wire frame for "dismiss," so nothing round-trips to the server.
+  - `respond(notificationId, actionId, input?): Promise<'accepted' | 'already_answered' | 'expired' | 'invalid'>` — looks up the action's signed token from the stored notification and calls `client.respondToAction()`, resolving once the matching `netifly.actionAck` arrives (or immediately with `'invalid'` if the notification/action isn't known locally — nothing to send). Kept as a hook-level convenience rather than a `NetiflyClient` method on purpose: that 3-argument shape would otherwise collide with the already-shipped, unrelated `client.respond(id, payload)`.
+  - An item also updates to `'expired'` on its own, client-side, once its `expiresAt` passes (no server round trip needed for that), and to `'answered'` when `netifly.notification.resolved` arrives — covering the case where the user answered it from a different tab or device.
+
+`react` (`^18.0.0 || ^19.0.0`) is a peer dependency; no other runtime dependency beyond `@netiflyjs/client`.
 
 ## 🏗️ Architecture
 

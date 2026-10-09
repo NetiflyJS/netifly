@@ -71,6 +71,51 @@ export interface ResolvedInfo {
   action: string;
 }
 
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
+
+export interface NotificationLink {
+  href: string;
+  label: string;
+}
+
+export interface InfoNotification {
+  kind: 'info';
+  title: string;
+  body: string;
+  severity?: NotificationSeverity;
+  link?: NotificationLink;
+  icon?: string;
+  expiresAt?: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface NotificationAction {
+  id: string;
+  label: string;
+  style?: 'primary' | 'danger' | 'default';
+  input?: { type: 'text'; placeholder?: string };
+}
+
+export interface ActionNotification {
+  kind: 'action';
+  title: string;
+  body: string;
+  actions: NotificationAction[];
+  expiresAt: number;
+  context?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}
+
+/** The shape `notify()` accepts server-side. Not sent to clients as-is — see `WireNotification`. */
+export type Notification = InfoNotification | ActionNotification;
+
+/** What a client actually receives on the wire — action notifications carry a signed, opaque token per action instead of raw context. */
+export type WireNotification =
+  | InfoNotification
+  | (Omit<ActionNotification, 'actions' | 'context'> & {
+      actions: (NotificationAction & { token: string })[];
+    });
+
 export interface NetiflyClientOptions {
   /** The Netifly WebSocket endpoint, e.g. `wss://api.example.com/netifly`. */
   url: string;

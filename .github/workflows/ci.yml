@@ -47,9 +47,9 @@ jobs:
       # Running @netiflyjs/client's jest suite needs a real global WebSocket,
       # which Node only ships unflagged from 22 — on 18/20 it would throw a
       # ReferenceError, so those legs run core + express only.
-      - name: Test (core, express)
+      - name: Test (core, express, react)
         if: matrix.node-version != 22
-        run: pnpm --filter '!@netiflyjs/client' run test
+        run: pnpm --filter '!@netiflyjs/client' --if-present run test
         env:
           REDIS_URL: redis://127.0.0.1:6379
 

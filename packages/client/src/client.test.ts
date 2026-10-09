@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { createNetifly } from '@netiflyjs/core';
 import type { NetiflyInstance } from '@netiflyjs/core';
 import { createNetiflyClient, NetiflyClient } from './client';
-import type { ActionAckInfo, ConnectionState, Envelope, ResolvedInfo } from './types';
+import type { ActionAckInfo, ConnectionState, Envelope, ResolvedInfo, WireNotification } from './types';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 
@@ -649,6 +649,62 @@ describe('NetiflyClient', () => {
       await wait(200);
 
       expect(client.lastEventId).toBe(envelope.id);
+    });
+  });
+
+  describe('onNotification()', () => {
+    it('fires with the info-kind WireNotification and the envelope id', async () => {
+      const server = track(await startServer());
+      const client = makeClient(server.port);
+      client.connect();
+      await nextState(client, 'open');
+      await wait(50);
+
+      const received = new Promise<{ notification: WireNotification; envelope: Envelope<WireNotification> }>(
+        (resolve) => {
+          const off = client.onNotification((notification, envelope) => {
+            off();
+            resolve({ notification, envelope });
+          });
+        }
+      );
+
+      await server.netifly.notify('alice', { kind: 'info', title: 'Hi', body: 'x' });
+      const { notification, envelope } = await received;
+
+      expect(notification).toEqual({ kind: 'info', title: 'Hi', body: 'x' });
+      expect(envelope.type).toBe('notification');
+      expect(typeof envelope.id).toBe('string');
+    });
+
+    it('fires with signed per-action tokens for an action-kind WireNotification', async () => {
+      const server = track(await startServerWithActions('client-on-notification-secret'));
+      const client = makeClient(server.port);
+      client.connect();
+      await nextState(client, 'open');
+      await wait(50);
+
+      const received = new Promise<WireNotification>((resolve) => {
+        const off = client.onNotification((notification) => {
+          off();
+          resolve(notification);
+        });
+      });
+
+      await server.netifly.notify('alice', {
+        kind: 'action',
+        title: 'Approve?',
+        body: 'x',
+        actions: [{ id: 'approve', label: 'Approve' }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const notification = await received;
+
+      expect(notification.kind).toBe('action');
+      if (notification.kind !== 'action') throw new Error('expected action kind');
+      expect(notification.actions).toHaveLength(1);
+      expect(notification.actions[0]).toMatchObject({ id: 'approve', label: 'Approve' });
+      expect(typeof notification.actions[0].token).toBe('string');
     });
   });
 

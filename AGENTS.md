@@ -9,6 +9,9 @@ real-time per-user notifications for Node.js servers (WebSockets + Redis pub/sub
 
 - `packages/core` — `@netiflyjs/core`, the framework-agnostic engine.
 - `packages/express` — `@netiflyjs/express`, a thin Express adapter over `core`.
+- `packages/client` — `@netiflyjs/client`, the browser/Node WebSocket client.
+- `packages/react` — `@netiflyjs/react`, a provider and hooks on top of `client`.
+- `examples/` — standalone example apps (not published) demonstrating the packages above.
 
 ## Setup
 

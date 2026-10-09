@@ -8,6 +8,7 @@ import type {
   NetiflyClientOptions,
   ResolvedInfo,
   TokenMode,
+  WireNotification,
 } from './types';
 
 const DEFAULT_BASE_DELAY_MS = 500;
@@ -69,6 +70,9 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
   private readonly errorHandlers = new Set<(error: Error) => void>();
   private readonly actionAckHandlers = new Set<(info: ActionAckInfo) => void>();
   private readonly resolvedHandlers = new Set<(info: ResolvedInfo) => void>();
+  private readonly notificationHandlers = new Set<
+    (data: WireNotification, envelope: Envelope<WireNotification>) => void
+  >();
 
   private socket: WebSocket | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -206,6 +210,18 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
   /** Subscribes to netifly.notification.resolved — fires on every one of a user's connections (including the one that answered) when an actionable notification is answered. */
   onResolved(handler: (info: ResolvedInfo) => void): Unsubscribe {
     return this.subscribe(this.resolvedHandlers, handler);
+  }
+
+  /**
+   * Subscribes to standard notifications sent via `notify()`/`notifyOr()` —
+   * typed as `WireNotification`, kept separate from the raw `on(type)`
+   * channel. Additive: a plain `on('notification', ...)`/`onAny()` handler
+   * keeps seeing the exact same envelope it always has.
+   */
+  onNotification(
+    handler: (data: WireNotification, envelope: Envelope<WireNotification>) => void
+  ): Unsubscribe {
+    return this.subscribe(this.notificationHandlers, handler);
   }
 
   /** Sends `{ type: 'read', id }`. No-op if not connected. */
@@ -424,6 +440,13 @@ export class NetiflyClient<Events extends EventMap = EventMap> {
       const info = envelope.data as ResolvedInfo;
       for (const handler of [...this.resolvedHandlers]) {
         this.safely(() => handler(info));
+      }
+    }
+    if (envelope.type === 'notification') {
+      const data = envelope.data as WireNotification;
+      const typedEnvelope = envelope as Envelope<WireNotification>;
+      for (const handler of [...this.notificationHandlers]) {
+        this.safely(() => handler(data, typedEnvelope));
       }
     }
 

@@ -10,3 +10,4 @@
   * [core](reference/core.md)
   * [express](reference/express.md)
   * [client](reference/client.md)
+  * [react](reference/react.md)
