@@ -101,6 +101,7 @@ repo (GitBook Git Sync format):
 
 - **[Getting started](docs/site/getting-started.md)** — install, quickstart for every package, and the typed-events pattern.
 - **[Security](docs/site/security.md)** — the origin allowlist, cookie vs. token auth, and the built-in abuse-vector limits.
+- **[Concepts](docs/site/concepts/README.md)** — the hook lifecycle, single/multi-user/two-way publishing patterns, and how persistence works (Netifly stores nothing — bring your own DB).
 - **[Recipes](docs/site/recipes/README.md)** — email when offline, notifying from a BullMQ worker, handling reconnects and token refresh, building a notification inbox.
 - **[API reference](docs/site/reference/README.md)** — the full, per-package reference: [`core`](docs/site/reference/core.md), [`express`](docs/site/reference/express.md), [`client`](docs/site/reference/client.md), [`react`](docs/site/reference/react.md).
 
