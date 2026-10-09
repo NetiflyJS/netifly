@@ -119,7 +119,47 @@ client.close(); // cancels any pending reconnect; never reconnects on its own
 The client handles reconnect (exponential backoff with full jitter) and
 token refresh (`getToken` is called again before every attempt) for you —
 see the [`client` reference](reference/client.md) for the full reconnect
-behavior table.
+behavior table, or
+[Handling reconnects and token refresh](recipes/client-reconnects-and-token-refresh.md)
+for a worked example.
+
+## React
+
+```tsx
+import { NetiflyProvider, useEvent, useNotifications } from '@netiflyjs/react';
+
+function App() {
+  return (
+    <NetiflyProvider url="wss://api.example.com/netifly" getToken={() => session.accessToken}>
+      <Inbox />
+    </NetiflyProvider>
+  );
+}
+
+function Inbox() {
+  useEvent('comment.created', (data) => toast(`New comment: ${data.commentId}`));
+  const { items, unreadCount, markRead } = useNotifications();
+
+  return (
+    <>
+      <span>{unreadCount} unread</span>
+      {items.map((item) => (
+        <article key={item.id}>
+          <strong>{item.notification.title}</strong>
+          <button onClick={() => markRead(item.id)}>Mark read</button>
+        </article>
+      ))}
+    </>
+  );
+}
+```
+
+`<NetiflyProvider>` owns a single `NetiflyClient`, connecting on mount and
+closing on unmount — StrictMode-safe and SSR-safe. See the
+[`react` reference](reference/react.md) for `useNetifly`/`useEvent`/
+`useNotifications` in full, or
+[Building a notification inbox](recipes/react-notification-inbox.md) for a
+worked example.
 
 ## Typed events
 

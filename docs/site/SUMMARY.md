@@ -6,6 +6,8 @@
 * [Recipes](recipes/README.md)
   * [Email when offline](recipes/email-when-offline.md)
   * [Notify from a BullMQ worker](recipes/notify-from-a-bullmq-worker.md)
+  * [Handling reconnects and token refresh](recipes/client-reconnects-and-token-refresh.md)
+  * [Building a notification inbox](recipes/react-notification-inbox.md)
 * [API Reference](reference/README.md)
   * [core](reference/core.md)
   * [express](reference/express.md)
