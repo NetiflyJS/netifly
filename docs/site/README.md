@@ -36,6 +36,9 @@ if a managed service is an acceptable trade for not running your own Redis.
 - **[`@netiflyjs/client`](reference/client.md)** — the browser/React
   Native/Node client SDK, ~1.7 KB gzipped, with reconnect and typed events
   built in.
+- **[`@netiflyjs/react`](reference/react.md)** — a provider and hooks
+  (`useNetifly`, `useEvent`, `useNotifications`) on top of the client SDK,
+  StrictMode- and SSR-safe.
 
 ## Where to go next
 
@@ -44,9 +47,12 @@ if a managed service is an acceptable trade for not running your own Redis.
 - **[Security](security.md)** — the origin allowlist, cookie vs. token auth,
   and the built-in abuse-vector limits.
 - **Recipes** — [email when a user is offline](recipes/email-when-offline.md),
-  [notifying from a BullMQ worker](recipes/notify-from-a-bullmq-worker.md).
+  [notifying from a BullMQ worker](recipes/notify-from-a-bullmq-worker.md),
+  [handling reconnects and token refresh](recipes/client-reconnects-and-token-refresh.md),
+  [building a notification inbox](recipes/react-notification-inbox.md).
 - **API reference** — [`core`](reference/core.md),
-  [`express`](reference/express.md), [`client`](reference/client.md).
+  [`express`](reference/express.md), [`client`](reference/client.md),
+  [`react`](reference/react.md).
 
 Source lives at [github.com/NetiflyJS/netifly](https://github.com/NetiflyJS/netifly),
 licensed under [MIT](https://github.com/NetiflyJS/netifly/blob/main/LICENSE).

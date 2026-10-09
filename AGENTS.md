@@ -100,8 +100,13 @@ in this repo — that folder is the source of truth, not GitBook's editor.
   isn't listed there. Every link in `SUMMARY.md` and between docs pages must
   resolve to a real file (see `docs/superpowers/specs/2026-09-27-docs-site-design.md`
   for the validation approach used when this was scaffolded).
-- Some pages are intentionally stubs (marked with a `> **Status:** stub`
-  line) — recipes and per-package API reference detail. Expanding them is
+- `docs/site/reference/*.md` is the deep source of truth for each
+  package's API — every option, event, and edge case. Each package's own
+  `packages/<pkg>/README.md` stays shorter (features, install, quickstart,
+  one recipe) and links back here for anything beyond that; don't
+  duplicate full option tables into both places, keep the npm README's
+  reference section brief and link out instead.
+- A page marked `> **Status:** stub` is unfinished — expanding it is
   ordinary docs work: edit in place, remove the stub marker once complete.
 - Git Sync itself (connecting the GitBook space to this repo/path, choosing
   sync direction) is configured in the GitBook app, not from a coding
